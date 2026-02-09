@@ -17,18 +17,28 @@ const TASK_HEADERS = [
 ];
 
 const OPS_HEADERS = ["opId", "processedAt"];
+const SPREADSHEET_NAME = "Personal Console DB";
+const SCRIPT_PROPERTY_KEY = "SPREADSHEET_ID";
 
 function doGet(e) {
   const route = getRoute_(e);
   if (route === "meta") {
-    return jsonResponse_({ ok: true, serverTime: new Date().toISOString() });
+    const db = ensureDb_();
+    return jsonResponse_({
+      ok: true,
+      spreadsheetId: db.spreadsheetId,
+      spreadsheetName: db.spreadsheetName,
+      spreadsheetUrl: db.spreadsheetUrl,
+      sheets: ["Tasks", "Ops"],
+      serverTime: new Date().toISOString()
+    });
   }
   if (route !== "tasks") {
     return jsonResponse_({ ok: false, error: "Route not found" }, 404);
   }
   const since = e && e.parameter ? e.parameter.since : null;
   const tasks = getTasksSince_(since);
-  return jsonResponse_({ tasks: tasks, serverTime: new Date().toISOString() });
+  return jsonResponse_({ ok: true, tasks: tasks, serverTime: new Date().toISOString() });
 }
 
 function doPost(e) {
@@ -40,27 +50,57 @@ function doPost(e) {
   const ops = body && Array.isArray(body.ops) ? body.ops : [];
   const result = upsertOps_(ops);
   return jsonResponse_({
-    accepted: result.accepted,
+    ok: true,
+    applied: result.applied,
     rejected: result.rejected,
     serverTime: new Date().toISOString()
   });
 }
 
 function getRoute_(e) {
+  if (e && e.parameter && e.parameter.route) {
+    return e.parameter.route;
+  }
   if (e && e.pathInfo) {
     const path = e.pathInfo.replace(/^\/+/, "");
     if (path) {
       return path;
     }
   }
-  if (e && e.parameter && e.parameter.route) {
-    return e.parameter.route;
-  }
   return "tasks";
 }
 
-function getSheet_(name, headers) {
-  const spreadsheet = SpreadsheetApp.getActiveSpreadsheet();
+function ensureDb_() {
+  const properties = PropertiesService.getScriptProperties();
+  let spreadsheetId = properties.getProperty(SCRIPT_PROPERTY_KEY);
+  let spreadsheet = null;
+  if (spreadsheetId) {
+    try {
+      spreadsheet = SpreadsheetApp.openById(spreadsheetId);
+    } catch (error) {
+      spreadsheet = null;
+    }
+  }
+  if (!spreadsheet) {
+    spreadsheet = SpreadsheetApp.create(SPREADSHEET_NAME);
+    spreadsheetId = spreadsheet.getId();
+    properties.setProperty(SCRIPT_PROPERTY_KEY, spreadsheetId);
+  }
+
+  const tasksSheet = ensureSheet_(spreadsheet, "Tasks", TASK_HEADERS);
+  const opsSheet = ensureSheet_(spreadsheet, "Ops", OPS_HEADERS);
+
+  return {
+    ss: spreadsheet,
+    tasksSheet: tasksSheet,
+    opsSheet: opsSheet,
+    spreadsheetId: spreadsheetId,
+    spreadsheetUrl: spreadsheet.getUrl(),
+    spreadsheetName: spreadsheet.getName()
+  };
+}
+
+function ensureSheet_(spreadsheet, name, headers) {
   let sheet = spreadsheet.getSheetByName(name);
   if (!sheet) {
     sheet = spreadsheet.insertSheet(name);
@@ -79,7 +119,8 @@ function ensureHeaders_(sheet, headers) {
 }
 
 function getTasksSince_(since) {
-  const sheet = getSheet_("Tasks", TASK_HEADERS);
+  const db = ensureDb_();
+  const sheet = db.tasksSheet;
   const data = sheet.getDataRange().getValues();
   if (data.length < 2) {
     return [];
@@ -98,11 +139,13 @@ function getTasksSince_(since) {
 }
 
 function upsertOps_(ops) {
-  const tasksSheet = getSheet_("Tasks", TASK_HEADERS);
-  const opsSheet = getSheet_("Ops", OPS_HEADERS);
+  const db = ensureDb_();
+  const tasksSheet = db.tasksSheet;
+  const opsSheet = db.opsSheet;
 
   const tasksData = tasksSheet.getDataRange().getValues();
-  const tasksHeaderIndex = indexHeaders_(tasksData[0]);
+  const headerRow = tasksData.length > 0 ? tasksData[0] : TASK_HEADERS;
+  const tasksHeaderIndex = indexHeaders_(headerRow);
   const taskRowMap = new Map();
   for (let i = 1; i < tasksData.length; i += 1) {
     const row = tasksData[i];
@@ -121,23 +164,79 @@ function upsertOps_(ops) {
     }
   }
 
-  const accepted = [];
+  const applied = [];
   const rejected = [];
   const opsToRecord = [];
   const rowsToUpdate = [];
   const rowsToAppend = [];
 
   ops.forEach((op) => {
-    if (!op || !op.opId || !op.task) {
+    if (!op || !op.opId || !op.taskId || !op.type) {
       return;
     }
     if (processedOps.has(op.opId)) {
-      accepted.push(op.opId);
+      applied.push(op.opId);
+      return;
+    }
+
+    const taskId = String(op.taskId);
+    const existingRow = taskRowMap.get(taskId);
+    const now = new Date().toISOString();
+
+    if (op.type === "delete") {
+      const incomingRevision =
+        (op.task && op.task.revision) || (op.baseRevision ? Number(op.baseRevision) : 0);
+      let deletedTask = null;
+      if (existingRow) {
+        const existingValues = tasksSheet
+          .getRange(existingRow, 1, 1, TASK_HEADERS.length)
+          .getValues()[0];
+        const existingTask = rowToTask_(existingValues, tasksHeaderIndex);
+        deletedTask = {
+          ...existingTask,
+          deletedAt: now,
+          updatedAt: now,
+          revision: Math.max(existingTask.revision + 1, incomingRevision || 0)
+        };
+        rowsToUpdate.push({ row: existingRow, values: taskToRow_(deletedTask) });
+      } else {
+        const fallbackTask = op.task || {
+          id: taskId,
+          title: "",
+          status: "inbox",
+          priority: "med",
+          stream: "otro",
+          tags: [],
+          estimateMin: undefined,
+          plannedAt: undefined,
+          dueAt: undefined,
+          createdAt: now,
+          updatedAt: now,
+          revision: Math.max(1, incomingRevision || 0),
+          deletedAt: now,
+          blockedNote: undefined,
+          doneAt: undefined
+        };
+        deletedTask = {
+          ...fallbackTask,
+          id: taskId,
+          deletedAt: now,
+          updatedAt: now,
+          revision: Math.max(1, incomingRevision || 0)
+        };
+        rowsToAppend.push(taskToRow_(deletedTask));
+      }
+
+      opsToRecord.push([op.opId, now]);
+      applied.push(op.opId);
+      return;
+    }
+
+    if (!op.task) {
       return;
     }
 
     const incoming = op.task;
-    const existingRow = taskRowMap.get(incoming.id);
     if (existingRow) {
       const existingValues = tasksSheet
         .getRange(existingRow, 1, 1, TASK_HEADERS.length)
@@ -148,7 +247,7 @@ function upsertOps_(ops) {
         (incoming.revision === existingTask.revision &&
           incoming.updatedAt > existingTask.updatedAt);
       if (!isNewer) {
-        rejected.push({ opId: op.opId, reason: "conflict", task: existingTask });
+        rejected.push({ opId: op.opId, reason: "conflict", serverTask: existingTask });
         return;
       }
       rowsToUpdate.push({ row: existingRow, values: taskToRow_(incoming) });
@@ -156,8 +255,8 @@ function upsertOps_(ops) {
       rowsToAppend.push(taskToRow_(incoming));
     }
 
-    opsToRecord.push([op.opId, new Date().toISOString()]);
-    accepted.push(op.opId);
+    opsToRecord.push([op.opId, now]);
+    applied.push(op.opId);
   });
 
   if (rowsToUpdate.length > 0) {
@@ -180,7 +279,7 @@ function upsertOps_(ops) {
     opsSheet.getRange(startRow, 1, opsToRecord.length, OPS_HEADERS.length).setValues(opsToRecord);
   }
 
-  return { accepted: accepted, rejected: rejected };
+  return { applied: applied, rejected: rejected };
 }
 
 function indexHeaders_(headers) {
@@ -202,17 +301,17 @@ function rowToTask_(row, index) {
     }
   }
   return {
-    id: String(row[index.id]),
-    title: String(row[index.title]),
-    status: String(row[index.status]),
-    priority: String(row[index.priority]),
-    stream: String(row[index.stream]),
+    id: String(row[index.id] || ""),
+    title: String(row[index.title] || ""),
+    status: String(row[index.status] || "inbox"),
+    priority: String(row[index.priority] || "med"),
+    stream: String(row[index.stream] || "otro"),
     tags: tags,
     estimateMin: row[index.estimateMin] ? Number(row[index.estimateMin]) : undefined,
     plannedAt: row[index.plannedAt] ? String(row[index.plannedAt]) : undefined,
     dueAt: row[index.dueAt] ? String(row[index.dueAt]) : undefined,
-    createdAt: String(row[index.createdAt]),
-    updatedAt: String(row[index.updatedAt]),
+    createdAt: row[index.createdAt] ? String(row[index.createdAt]) : new Date().toISOString(),
+    updatedAt: row[index.updatedAt] ? String(row[index.updatedAt]) : new Date().toISOString(),
     revision: Number(row[index.revision]) || 0,
     deletedAt: row[index.deletedAt] ? String(row[index.deletedAt]) : undefined,
     blockedNote: row[index.blockedNote] ? String(row[index.blockedNote]) : undefined,

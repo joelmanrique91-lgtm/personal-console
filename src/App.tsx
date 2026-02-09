@@ -7,7 +7,7 @@ import { FocusTimer } from "./components/FocusTimer";
 import { ReviewSummary } from "./components/ReviewSummary";
 import { TaskCard } from "./components/TaskCard";
 import { TaskInput } from "./components/TaskInput";
-import { fetchMeta } from "./services/api";
+import { fetchMetaWithStatus, postOpsWithStatus } from "./services/api";
 import { buildEmptyTask, useStore } from "./store/store";
 import { Task, TaskPriority, TaskStatus, TaskStream } from "./store/types";
 import { useSyncEngine } from "./sync/engine";
@@ -46,11 +46,14 @@ export function App() {
   const [statusMessage, setStatusMessage] = useState("");
   const [webAppUrl, setWebAppUrl] = useState("");
   const [connectionStatus, setConnectionStatus] = useState("");
+  const [metaStatus, setMetaStatus] = useState<number | null>(null);
+  const [metaBody, setMetaBody] = useState<unknown>(null);
+  const [testStatus, setTestStatus] = useState<number | null>(null);
+  const [testBody, setTestBody] = useState<unknown>(null);
   const [calendarDate, setCalendarDate] = useState(new Date());
 
-  const { syncing, pendingOps, conflicts, isOnline, syncNow } = useSyncEngine(
-    actions.replaceTasks
-  );
+  const { syncing, pendingOps, conflictsResolved, isOnline, lastServerTime, syncNow } =
+    useSyncEngine(actions.replaceTasks);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -85,10 +88,10 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (conflicts.length > 0) {
-      setStatusMessage(`Conflictos resueltos: ${conflicts.length}.`);
+    if (conflictsResolved > 0) {
+      setStatusMessage(`Conflictos resueltos automáticamente: ${conflictsResolved}.`);
     }
-  }, [conflicts.length]);
+  }, [conflictsResolved]);
 
   const visibleTasks = useMemo(
     () => state.tasks.filter((task) => !task.deletedAt),
@@ -234,12 +237,46 @@ export function App() {
       return;
     }
     setConnectionStatus("Probando conexión...");
+    setMetaStatus(null);
+    setMetaBody(null);
     try {
-      await fetchMeta(webAppUrl);
-      setConnectionStatus("Conexión OK.");
+      const result = await fetchMetaWithStatus(webAppUrl);
+      setMetaStatus(result.status);
+      setMetaBody(result.body);
+      setConnectionStatus(result.ok ? "Conexión OK." : "Conexión falló.");
     } catch (error) {
       console.error("Connection test failed", error);
       setConnectionStatus("No se pudo conectar.");
+    }
+  };
+
+  const handleSendTestTask = async () => {
+    if (!webAppUrl) {
+      setConnectionStatus("Ingresa la URL del Web App.");
+      return;
+    }
+    const now = new Date();
+    const testTask = buildEmptyTask({ title: `TEST_SHEET_${now.getTime()}` });
+    setTestStatus(null);
+    setTestBody(null);
+    try {
+      const result = await postOpsWithStatus(webAppUrl, {
+        ops: [
+          {
+            opId: crypto.randomUUID(),
+            type: "upsert",
+            taskId: testTask.id,
+            task: testTask,
+            createdAt: now.toISOString()
+          }
+        ]
+      });
+      setTestStatus(result.status);
+      setTestBody(result.body);
+      setStatusMessage("TEST task enviada. Revisa Google Sheets.");
+    } catch (error) {
+      console.error("Test task failed", error);
+      setStatusMessage("No se pudo enviar la TEST task.");
     }
   };
 
@@ -269,6 +306,9 @@ export function App() {
         : "someday";
     actions.updateTask({ ...task, plannedAt, status });
   };
+
+  const metaJson = typeof metaBody === "object" && metaBody !== null ? (metaBody as any) : null;
+  const metaUrl = metaJson && metaJson.spreadsheetUrl ? String(metaJson.spreadsheetUrl) : "";
 
   return (
     <div className="app">
@@ -478,7 +518,11 @@ export function App() {
                 type="button"
                 onClick={() =>
                   setCalendarDate(
-                    new Date(calendarDate.getFullYear(), calendarDate.getMonth(), calendarDate.getDate() - 7)
+                    new Date(
+                      calendarDate.getFullYear(),
+                      calendarDate.getMonth(),
+                      calendarDate.getDate() - 7
+                    )
                   )
                 }
               >
@@ -488,7 +532,11 @@ export function App() {
                 type="button"
                 onClick={() =>
                   setCalendarDate(
-                    new Date(calendarDate.getFullYear(), calendarDate.getMonth(), calendarDate.getDate() + 7)
+                    new Date(
+                      calendarDate.getFullYear(),
+                      calendarDate.getMonth(),
+                      calendarDate.getDate() + 7
+                    )
                   )
                 }
               >
@@ -508,12 +556,23 @@ export function App() {
         <section className="view">
           <div className="settings">
             <h2>Sincronización</h2>
+            <div className="settings__status-grid">
+              <div>
+                <strong>Estado:</strong> {isOnline ? "Online" : "Offline"}
+              </div>
+              <div>
+                <strong>Último sync:</strong> {lastServerTime ?? "--"}
+              </div>
+              <div>
+                <strong>Ops pendientes:</strong> {pendingOps}
+              </div>
+            </div>
             <label>
               URL del Web App
               <input
                 type="url"
                 value={webAppUrl}
-                placeholder="https://script.google.com/macros/s/..."
+                placeholder="https://script.google.com/macros/s/.../exec"
                 onChange={(event) => setWebAppUrl(event.target.value)}
               />
             </label>
@@ -524,11 +583,44 @@ export function App() {
               <button type="button" onClick={handleTestConnection}>
                 Test connection
               </button>
+              <button type="button" onClick={handleSendTestTask}>
+                Send TEST task
+              </button>
               <button type="button" onClick={handleSyncNow} disabled={!isOnline || syncing}>
                 Sync now
               </button>
             </div>
             {connectionStatus ? <p className="settings__status">{connectionStatus}</p> : null}
+            <div className="settings__results">
+              <div>
+                <h3>Meta response</h3>
+                <p>
+                  <strong>URL:</strong> {webAppUrl ? `${webAppUrl}?route=meta` : "--"}
+                </p>
+                <p>
+                  <strong>Status:</strong> {metaStatus ?? "--"}
+                </p>
+                {metaUrl ? (
+                  <p>
+                    <strong>Spreadsheet:</strong>{" "}
+                    <a href={metaUrl} target="_blank" rel="noreferrer">
+                      Abrir Spreadsheet
+                    </a>
+                  </p>
+                ) : null}
+                <pre>{metaBody ? JSON.stringify(metaBody, null, 2) : "--"}</pre>
+              </div>
+              <div>
+                <h3>TEST task response</h3>
+                <p>
+                  <strong>URL:</strong> {webAppUrl ? `${webAppUrl}?route=upsert` : "--"}
+                </p>
+                <p>
+                  <strong>Status:</strong> {testStatus ?? "--"}
+                </p>
+                <pre>{testBody ? JSON.stringify(testBody, null, 2) : "--"}</pre>
+              </div>
+            </div>
           </div>
         </section>
       ) : null}

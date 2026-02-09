@@ -22,6 +22,7 @@ export interface Task {
   status: TaskStatus;
   priority: TaskPriority;
   stream: TaskStream;
+  tags: string[];
   estimateMin?: number;
   plannedAt?: string;
   dueAt?: string;
@@ -29,9 +30,8 @@ export interface Task {
   updatedAt: string;
   revision: number;
   deletedAt?: string;
-  doneAt?: string;
   blockedNote?: string;
-  tags?: string[];
+  doneAt?: string;
 }
 
 export interface FocusSession {

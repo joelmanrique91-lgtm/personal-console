@@ -484,6 +484,16 @@ button:active,
   box-shadow: 0 12px 30px rgba(25, 25, 30, 0.08);
 }
 
+.settings__status-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  background: #f6f6f9;
+  padding: 12px;
+  border-radius: 12px;
+  font-size: 14px;
+}
+
 .settings label {
   display: flex;
   flex-direction: column;
@@ -506,6 +516,22 @@ button:active,
 .settings__status {
   margin: 0;
   color: #5a5a5f;
+}
+
+.settings__results {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.settings__results pre {
+  background: #f4f4f7;
+  padding: 12px;
+  border-radius: 10px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 12px;
+  margin: 0;
 }
 
 .palette {
