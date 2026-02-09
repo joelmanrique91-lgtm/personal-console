@@ -19,13 +19,16 @@ export type TaskStream =
 export interface Task {
   id: string;
   title: string;
-  notes?: string;
   status: TaskStatus;
   priority: TaskPriority;
   stream: TaskStream;
   estimateMin?: number;
+  plannedAt?: string;
+  dueAt?: string;
   createdAt: string;
-  dueDate?: string;
+  updatedAt: string;
+  revision: number;
+  deletedAt?: string;
   doneAt?: string;
   blockedNote?: string;
   tags?: string[];

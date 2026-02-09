@@ -109,6 +109,25 @@ button:active,
   width: 100%;
 }
 
+.app-header__status {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  font-size: 0.9rem;
+  color: #5a5a5f;
+}
+
+.app-header__status .online {
+  color: #1f7a3f;
+  font-weight: 600;
+}
+
+.app-header__status .offline {
+  color: #b33939;
+  font-weight: 600;
+}
+
 .app-header button,
 .import-label {
   display: inline-flex;
@@ -311,6 +330,105 @@ button:active,
   font-weight: 600;
 }
 
+.calendar-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.calendar-header__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.calendar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.calendar__weekdays {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+  font-weight: 600;
+  color: #5a5a5f;
+}
+
+.calendar__grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 8px;
+}
+
+.calendar__cell {
+  background: #fff;
+  border-radius: 12px;
+  padding: 10px;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border: 1px solid #ececec;
+}
+
+.calendar__cell--dim {
+  opacity: 0.5;
+}
+
+.calendar__date {
+  font-weight: 600;
+}
+
+.calendar__tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.calendar__task {
+  background: #f5f5f7;
+  border-radius: 8px;
+  padding: 6px 8px;
+  font-size: 0.85rem;
+}
+
+.calendar-week {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.calendar-week__day {
+  background: #fff;
+  border-radius: 12px;
+  padding: 16px;
+  border: 1px solid #ececec;
+}
+
+.calendar-week__header {
+  display: flex;
+  justify-content: space-between;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.calendar-week__tasks {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.calendar-week__empty {
+  margin: 0;
+  color: #5a5a5f;
+  font-size: 0.9rem;
+}
+
 .focus-card {
   background: #fff;
   border-radius: 12px;
@@ -354,6 +472,40 @@ button:active,
   flex-wrap: wrap;
   gap: 12px;
   margin-top: 16px;
+}
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  background: #fff;
+  padding: 20px;
+  border-radius: 16px;
+  box-shadow: 0 12px 30px rgba(25, 25, 30, 0.08);
+}
+
+.settings label {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-weight: 600;
+}
+
+.settings input {
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #d0d0d0;
+}
+
+.settings__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.settings__status {
+  margin: 0;
+  color: #5a5a5f;
 }
 
 .palette {
