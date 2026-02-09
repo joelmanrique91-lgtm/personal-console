@@ -18,13 +18,34 @@ npm run dev
 
 La app corre en `http://localhost:5173`.
 
+## Por qué el túnel bloqueaba el host (y cómo se resolvió)
+
+Vite bloquea por defecto hosts externos para evitar requests no deseados. Para desarrollo con
+Cloudflare Quick Tunnel (subdominios `*.trycloudflare.com` que cambian cada vez), se habilitó
+`server.allowedHosts` en `vite.config.ts` para permitir cualquier host **solo en el servidor
+de desarrollo**. Esto evita el error **"Blocked request. This host is not allowed"** sin afectar
+builds de producción.
+
 ## Ejecutar local + túnel (Windows)
 
 ```cmd
 run_local_and_tunnel.cmd
 ```
 
-Esto levanta Vite en `0.0.0.0:5173` y abre un túnel con `cloudflared` (quick tunnel). En la consola vas a ver la URL pública para abrir desde el celular.
+Este launcher:
+
+- Instala dependencias si faltan.
+- Levanta Vite en `0.0.0.0:5173`.
+- Abre el túnel con `cloudflared`.
+- Muestra la URL pública `https://*.trycloudflare.com` en la ventana de Cloudflared.
+
+Para instalar Cloudflare Tunnel:
+
+```cmd
+winget install Cloudflare.cloudflared
+```
+
+Abrí la URL del túnel en tu celular.
 
 ## (Opcional) Ejecutar con Python
 
@@ -49,6 +70,7 @@ Si `cloudflared` no está instalado, el script imprime instrucciones.
 - **Puerto ocupado**: cambiá el puerto en `vite.config.ts` y en los scripts/launcher.
 - **Firewall Windows**: permití Node.js y cloudflared para conexiones entrantes.
 - **cloudflared no encontrado**: instalá con `winget` o `choco`.
+- **Blocked request**: asegurate de tener `server.allowedHosts` habilitado en `vite.config.ts`.
 
 ## Decisiones de diseño
 
