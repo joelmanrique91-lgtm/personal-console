@@ -48,7 +48,7 @@ export function TaskCard({ task, onMove, onSelect }: TaskCardProps) {
         {task.stream}
         {task.estimateMin ? ` · ${task.estimateMin}m` : ""}
       </p>
-      {task.notes ? <p className="task-card__notes">{task.notes}</p> : null}
+      {task.blockedNote ? <p className="task-card__notes">{task.blockedNote}</p> : null}
       {task.tags && task.tags.length > 0 ? (
         <div className="task-card__tags">
           {task.tags.map((tag) => (

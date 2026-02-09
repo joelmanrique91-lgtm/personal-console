@@ -1,13 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { BoardColumn } from "./components/BoardColumn";
+import { CalendarMonth } from "./components/CalendarMonth";
+import { CalendarWeek } from "./components/CalendarWeek";
 import { Filters } from "./components/Filters";
 import { FocusTimer } from "./components/FocusTimer";
 import { ReviewSummary } from "./components/ReviewSummary";
 import { TaskCard } from "./components/TaskCard";
 import { TaskInput } from "./components/TaskInput";
+import { fetchMeta } from "./services/api";
 import { buildEmptyTask, useStore } from "./store/store";
 import { Task, TaskPriority, TaskStatus, TaskStream } from "./store/types";
-import { isSameDay } from "./utils/date";
+import { useSyncEngine } from "./sync/engine";
+import { buildExportPayload, importSyncPayload } from "./sync/importExport";
+import { getSyncSettings, setSyncSettings } from "./sync/storage";
+import { endOfWeek, isSameDay, startOfWeek } from "./utils/date";
 import { parseQuickInput } from "./utils/quickParser";
 import "./styles/app.css";
 
@@ -21,16 +27,30 @@ const statuses: { status: TaskStatus; label: string }[] = [
 ];
 const statusLabels = Object.fromEntries(statuses.map(({ status, label }) => [status, label]));
 
-type View = "inbox" | "board" | "focus" | "review";
+type View =
+  | "inbox"
+  | "board"
+  | "focus"
+  | "review"
+  | "calendar-month"
+  | "calendar-week"
+  | "settings";
 
 export function App() {
-  const { state, dispatch } = useStore();
+  const { state, dispatch, actions } = useStore();
   const [view, setView] = useState<View>("inbox");
   const [streamFilter, setStreamFilter] = useState<TaskStream | "all">("all");
   const [priorityFilter, setPriorityFilter] = useState<TaskPriority | "all">("all");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
+  const [webAppUrl, setWebAppUrl] = useState("");
+  const [connectionStatus, setConnectionStatus] = useState("");
+  const [calendarDate, setCalendarDate] = useState(new Date());
+
+  const { syncing, pendingOps, conflicts, isOnline, syncNow } = useSyncEngine(
+    actions.replaceTasks
+  );
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -54,8 +74,29 @@ export function App() {
     return () => window.clearTimeout(timeout);
   }, [statusMessage]);
 
+  useEffect(() => {
+    const loadSettings = async () => {
+      const settings = await getSyncSettings();
+      if (settings.webAppUrl) {
+        setWebAppUrl(settings.webAppUrl);
+      }
+    };
+    void loadSettings();
+  }, []);
+
+  useEffect(() => {
+    if (conflicts.length > 0) {
+      setStatusMessage(`Conflictos resueltos: ${conflicts.length}.`);
+    }
+  }, [conflicts.length]);
+
+  const visibleTasks = useMemo(
+    () => state.tasks.filter((task) => !task.deletedAt),
+    [state.tasks]
+  );
+
   const filteredTasks = useMemo(() => {
-    return state.tasks.filter((task) => {
+    return visibleTasks.filter((task) => {
       if (streamFilter !== "all" && task.stream !== streamFilter) {
         return false;
       }
@@ -64,29 +105,29 @@ export function App() {
       }
       return true;
     });
-  }, [state.tasks, streamFilter, priorityFilter]);
+  }, [visibleTasks, streamFilter, priorityFilter]);
 
-  const inboxTasks = state.tasks.filter((task) => task.status === "inbox");
-  const todayCount = state.tasks.filter((task) => task.status === "today").length;
+  const inboxTasks = visibleTasks.filter((task) => task.status === "inbox");
+  const todayCount = visibleTasks.filter((task) => task.status === "today").length;
 
-  const focusTask = state.tasks.find((task) => task.id === state.activeTaskId);
+  const focusTask = visibleTasks.find((task) => task.id === state.activeTaskId);
 
   const todaySessions = state.focusSessions.filter((session) =>
     isSameDay(session.startedAt)
   );
   const focusMinutes = todaySessions.reduce((sum, session) => sum + session.minutes, 0);
 
-  const todayCompleted = state.tasks.filter(
+  const todayCompleted = visibleTasks.filter(
     (task) => task.status === "done" && task.doneAt && isSameDay(task.doneAt)
   );
-  const todayPending = state.tasks.filter(
+  const todayPending = visibleTasks.filter(
     (task) =>
       task.status !== "done" &&
       task.status !== "blocked" &&
       task.createdAt &&
       isSameDay(task.createdAt)
   );
-  const todayBlocked = state.tasks.filter(
+  const todayBlocked = visibleTasks.filter(
     (task) => task.status === "blocked" && task.createdAt && isSameDay(task.createdAt)
   );
 
@@ -102,15 +143,15 @@ export function App() {
       estimateMin: parsed.estimateMin,
       tags: parsed.tags
     });
-    dispatch({ type: "add-task", payload: task });
+    actions.addTask(task);
   };
 
   const moveTask = (task: Task, status: TaskStatus) => {
-    dispatch({ type: "set-status", payload: { id: task.id, status } });
+    actions.setStatus(task.id, status);
   };
 
   const handleDrop = (status: TaskStatus, taskId: string) => {
-    dispatch({ type: "set-status", payload: { id: taskId, status } });
+    actions.setStatus(taskId, status);
   };
 
   const handleSelectFocus = (task: Task) => {
@@ -122,14 +163,11 @@ export function App() {
     if (!focusTask) {
       return;
     }
-    dispatch({
-      type: "add-session",
-      payload: {
-        id: crypto.randomUUID(),
-        taskId: focusTask.id,
-        minutes,
-        startedAt: new Date().toISOString()
-      }
+    actions.addSession({
+      id: crypto.randomUUID(),
+      taskId: focusTask.id,
+      minutes,
+      startedAt: new Date().toISOString()
     });
   };
 
@@ -137,21 +175,15 @@ export function App() {
     if (!focusTask) {
       return;
     }
-    dispatch({
-      type: "update-task",
-      payload: {
-        ...focusTask,
-        status: "blocked",
-        blockedNote: note
-      }
+    actions.updateTask({
+      ...focusTask,
+      status: "blocked",
+      blockedNote: note
     });
   };
 
-  const handleExport = () => {
-    const payload = JSON.stringify({
-      tasks: state.tasks,
-      focusSessions: state.focusSessions
-    });
+  const handleExport = async () => {
+    const payload = JSON.stringify(await buildExportPayload());
     const blob = new Blob([payload], { type: "application/json" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
@@ -170,26 +202,73 @@ export function App() {
         setStatusMessage("El archivo no tiene tareas válidas.");
         return;
       }
-      dispatch({
-        type: "bulk-import",
-        payload: {
+      await importSyncPayload(
+        {
           tasks: parsed.tasks,
           focusSessions: Array.isArray(parsed.focusSessions)
             ? (parsed.focusSessions as typeof state.focusSessions)
-            : [],
-          activeTaskId: state.activeTaskId
-        }
-      });
-      setStatusMessage("Importación completada.");
+            : []
+        },
+        actions.replaceTasks,
+        actions.replaceFocusSessions
+      );
+      setStatusMessage("Importación completada. Ops generadas para sincronizar.");
     } catch (error) {
       console.error("Import failed", error);
       setStatusMessage("No se pudo importar el archivo.");
     }
   };
 
-  const paletteResults = state.tasks.filter((task) =>
+  const paletteResults = visibleTasks.filter((task) =>
     task.title.toLowerCase().includes(paletteQuery.toLowerCase())
   );
+
+  const handleSaveUrl = async () => {
+    await setSyncSettings({ webAppUrl });
+    setStatusMessage("URL guardada.");
+  };
+
+  const handleTestConnection = async () => {
+    if (!webAppUrl) {
+      setConnectionStatus("Ingresa la URL del Web App.");
+      return;
+    }
+    setConnectionStatus("Probando conexión...");
+    try {
+      await fetchMeta(webAppUrl);
+      setConnectionStatus("Conexión OK.");
+    } catch (error) {
+      console.error("Connection test failed", error);
+      setConnectionStatus("No se pudo conectar.");
+    }
+  };
+
+  const handleSyncNow = async () => {
+    try {
+      await syncNow();
+      setStatusMessage("Sincronización completada.");
+    } catch (error) {
+      console.error("Sync failed", error);
+      setStatusMessage("No se pudo sincronizar.");
+    }
+  };
+
+  const handlePlanTask = (date: Date, taskId: string) => {
+    const task = visibleTasks.find((item) => item.id === taskId);
+    if (!task) {
+      return;
+    }
+    const plannedAt = date.toISOString();
+    const now = new Date();
+    const weekStart = startOfWeek(now);
+    const weekEnd = endOfWeek(now);
+    const status = isSameDay(plannedAt)
+      ? "today"
+      : date >= weekStart && date <= weekEnd
+        ? "week"
+        : "someday";
+    actions.updateTask({ ...task, plannedAt, status });
+  };
 
   return (
     <div className="app">
@@ -207,7 +286,7 @@ export function App() {
           >
             Buscar (Ctrl+K)
           </button>
-          <button type="button" onClick={handleExport}>
+          <button type="button" onClick={() => void handleExport()}>
             Exportar
           </button>
           <label className="import-label">
@@ -224,6 +303,13 @@ export function App() {
             />
           </label>
         </div>
+        <div className="app-header__status">
+          <span className={isOnline ? "online" : "offline"}>
+            {isOnline ? "Online" : "Offline"}
+          </span>
+          <span>{pendingOps} ops pendientes</span>
+          {syncing ? <span>Syncing...</span> : null}
+        </div>
         {statusMessage ? (
           <div className="status-banner" role="status" aria-live="polite">
             {statusMessage}
@@ -237,7 +323,10 @@ export function App() {
             { id: "inbox", label: "Bandeja" },
             { id: "board", label: "Tablero" },
             { id: "focus", label: "Enfoque" },
-            { id: "review", label: "Revisión" }
+            { id: "review", label: "Revisión" },
+            { id: "calendar-month", label: "Calendario Mes" },
+            { id: "calendar-week", label: "Calendario Semana" },
+            { id: "settings", label: "Settings" }
           ] as { id: View; label: string }[]
         ).map((item) => (
           <button
@@ -329,11 +418,118 @@ export function App() {
               todayPending.forEach((task) => moveTask(task, "today"));
             }}
             onClearTrash={() => {
-              state.tasks
+              visibleTasks
                 .filter((task) => task.status === "inbox" && task.title.length < 3)
-                .forEach((task) => dispatch({ type: "delete-task", payload: task.id }));
+                .forEach((task) => actions.deleteTask(task.id));
             }}
           />
+        </section>
+      ) : null}
+
+      {view === "calendar-month" ? (
+        <section className="view">
+          <div className="calendar-header">
+            <h2>
+              {calendarDate.toLocaleDateString("es-ES", { month: "long", year: "numeric" })}
+            </h2>
+            <div className="calendar-header__actions">
+              <button
+                type="button"
+                onClick={() =>
+                  setCalendarDate(
+                    new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1)
+                  )
+                }
+              >
+                Mes anterior
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setCalendarDate(
+                    new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 1)
+                  )
+                }
+              >
+                Mes siguiente
+              </button>
+            </div>
+          </div>
+          <CalendarMonth
+            currentDate={calendarDate}
+            tasks={visibleTasks}
+            onDropTask={handlePlanTask}
+          />
+        </section>
+      ) : null}
+
+      {view === "calendar-week" ? (
+        <section className="view">
+          <div className="calendar-header">
+            <h2>
+              Semana del{" "}
+              {startOfWeek(calendarDate).toLocaleDateString("es-ES", {
+                day: "numeric",
+                month: "short"
+              })}
+            </h2>
+            <div className="calendar-header__actions">
+              <button
+                type="button"
+                onClick={() =>
+                  setCalendarDate(
+                    new Date(calendarDate.getFullYear(), calendarDate.getMonth(), calendarDate.getDate() - 7)
+                  )
+                }
+              >
+                Semana anterior
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  setCalendarDate(
+                    new Date(calendarDate.getFullYear(), calendarDate.getMonth(), calendarDate.getDate() + 7)
+                  )
+                }
+              >
+                Semana siguiente
+              </button>
+            </div>
+          </div>
+          <CalendarWeek
+            currentDate={calendarDate}
+            tasks={visibleTasks}
+            onDropTask={handlePlanTask}
+          />
+        </section>
+      ) : null}
+
+      {view === "settings" ? (
+        <section className="view">
+          <div className="settings">
+            <h2>Sincronización</h2>
+            <label>
+              URL del Web App
+              <input
+                type="url"
+                value={webAppUrl}
+                placeholder="https://script.google.com/macros/s/..."
+                onChange={(event) => setWebAppUrl(event.target.value)}
+              />
+            </label>
+            <div className="settings__actions">
+              <button type="button" onClick={handleSaveUrl}>
+                Guardar URL
+              </button>
+              <button type="button" onClick={handleTestConnection}>
+                Test connection
+              </button>
+              <button type="button" onClick={handleSyncNow} disabled={!isOnline || syncing}>
+                Sync now
+              </button>
+            </div>
+            {connectionStatus ? <p className="settings__status">{connectionStatus}</p> : null}
+          </div>
         </section>
       ) : null}
 

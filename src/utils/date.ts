@@ -15,3 +15,22 @@ export function formatMinutes(minutes: number): string {
   const remaining = minutes % 60;
   return `${hours}h ${remaining}m`;
 }
+
+export function startOfDay(date = new Date()): Date {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+export function startOfWeek(date = new Date()): Date {
+  const day = date.getDay();
+  const diff = day === 0 ? -6 : 1 - day;
+  return startOfDay(new Date(date.getFullYear(), date.getMonth(), date.getDate() + diff));
+}
+
+export function endOfWeek(date = new Date()): Date {
+  const start = startOfWeek(date);
+  return new Date(start.getFullYear(), start.getMonth(), start.getDate() + 6, 23, 59, 59, 999);
+}
+
+export function toIsoDate(date: Date): string {
+  return date.toISOString();
+}
