@@ -7,27 +7,32 @@ interface FiltersProps {
   onPriorityChange: (value: TaskPriority | "all") => void;
 }
 
-const streams: Array<TaskStream | "all"> = [
-  "all",
-  "geologia",
-  "pistacho",
-  "casa",
-  "finanzas",
-  "salud",
-  "otro"
+const streams: Array<{ value: TaskStream | "all"; label: string }> = [
+  { value: "all", label: "Todas" },
+  { value: "geologia", label: "Geología" },
+  { value: "pistacho", label: "Pistacho" },
+  { value: "casa", label: "Casa" },
+  { value: "finanzas", label: "Finanzas" },
+  { value: "salud", label: "Salud" },
+  { value: "otro", label: "Otro" }
 ];
 
-const priorities: Array<TaskPriority | "all"> = ["all", "low", "med", "high"];
+const priorities: Array<{ value: TaskPriority | "all"; label: string }> = [
+  { value: "all", label: "Todas" },
+  { value: "low", label: "Baja" },
+  { value: "med", label: "Media" },
+  { value: "high", label: "Alta" }
+];
 
 export function Filters({ stream, priority, onStreamChange, onPriorityChange }: FiltersProps) {
   return (
     <div className="filters">
       <label>
-        Stream
+        Área
         <select value={stream} onChange={(event) => onStreamChange(event.target.value as TaskStream | "all")}>
-          {streams.map((value) => (
-            <option key={value} value={value}>
-              {value}
+          {streams.map((item) => (
+            <option key={item.value} value={item.value}>
+              {item.label}
             </option>
           ))}
         </select>
@@ -38,9 +43,9 @@ export function Filters({ stream, priority, onStreamChange, onPriorityChange }: 
           value={priority}
           onChange={(event) => onPriorityChange(event.target.value as TaskPriority | "all")}
         >
-          {priorities.map((value) => (
-            <option key={value} value={value}>
-              {value}
+          {priorities.map((item) => (
+            <option key={item.value} value={item.value}>
+              {item.label}
             </option>
           ))}
         </select>

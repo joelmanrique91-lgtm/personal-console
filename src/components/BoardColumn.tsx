@@ -12,6 +12,8 @@ export function BoardColumn({ title, status, onDropTask, children }: BoardColumn
   return (
     <section
       className="board-column"
+      role="region"
+      aria-label={`Columna ${title}`}
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => {
         event.preventDefault();

@@ -39,24 +39,28 @@ export function FocusTimer({ task, sessions, onAddSession, onBlocked }: FocusTim
 
   return (
     <div className="focus-card">
-      <h3>Focus</h3>
+      <h3>Enfoque</h3>
       {task ? (
         <>
           <p className="focus-card__title">{task.title}</p>
           <div className="focus-card__timer">
-            <span>{formatMinutes(Math.round(elapsedSeconds / 60))}</span>
+            <span aria-live="polite">{formatMinutes(Math.round(elapsedSeconds / 60))}</span>
             <div>
               <button type="button" onClick={() => setRunning(true)} disabled={running}>
-                Start
+                Iniciar
               </button>
               <button type="button" onClick={handleStop} disabled={!running}>
-                Stop
+                Detener
               </button>
             </div>
           </div>
           <p className="focus-card__meta">Total hoy: {formatMinutes(totalMinutes)}</p>
           <div className="focus-card__blocked">
+            <label className="sr-only" htmlFor="blocked-note">
+              Motivo de bloqueo
+            </label>
             <textarea
+              id="blocked-note"
               placeholder="Nota obligatoria si está bloqueada"
               value={blockedNote}
               onChange={(event) => setBlockedNote(event.target.value)}
@@ -70,12 +74,12 @@ export function FocusTimer({ task, sessions, onAddSession, onBlocked }: FocusTim
                 }
               }}
             >
-              Bloqueado
+              Marcar como bloqueada
             </button>
           </div>
         </>
       ) : (
-        <p>Seleccioná una tarea en el tablero para enfocarte.</p>
+        <p>Selecciona una tarea en el tablero para enfocarte.</p>
       )}
     </div>
   );
