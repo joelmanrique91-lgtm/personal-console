@@ -1,37 +1,32 @@
 # Backend (Apps Script + Google Sheets)
 
-## 1) Crear el Spreadsheet
-1. Crea un Google Spreadsheet en tu Drive.
-2. Crea dos pestañas: `Tasks` y `Ops`.
-3. En `Tasks` coloca esta fila de headers (fila 1):
-   ```
-   id,title,status,priority,stream,tags,estimateMin,plannedAt,dueAt,createdAt,updatedAt,revision,deletedAt,blockedNote,doneAt
-   ```
-4. En `Ops` coloca esta fila de headers (fila 1):
-   ```
-   opId,processedAt
-   ```
-
-## 2) Pegar el Apps Script
-1. Abre **Extensiones → Apps Script**.
+## 1) Pegar el Apps Script
+1. Abre **Extensiones → Apps Script** en Google Drive.
 2. Crea un archivo `Code.gs` y pega el contenido de `apps-script/Code.gs`.
 3. Guarda el proyecto.
 
-## 3) Desplegar Web App
+## 2) Desplegar Web App
 1. **Implementar → Nueva implementación**.
 2. Tipo: **Aplicación web**.
 3. Ejecutar como: **Yo**.
 4. Quién tiene acceso: **Cualquiera con el enlace**.
-5. Implementa y copia la URL de la Web App.
+5. Implementa y copia la URL del Web App (`/exec`).
 
-## 4) URL final para la app
-Guarda la URL en Settings dentro de la app.
+## 3) Auto-provision (sin crear Sheets a mano)
+La primera vez que se ejecuta el Web App (por ejemplo con **Test connection** en Settings):
+- Se crea automáticamente una Spreadsheet llamada **"Personal Console DB"** en el Drive del dueño del script.
+- Se crean las pestañas **Tasks** y **Ops** si no existen.
+- Se escriben los headers necesarios en la fila 1.
+- El `spreadsheetId` se guarda en `PropertiesService` para futuras ejecuciones.
+
+## 4) Ver la Spreadsheet
+En Settings, usa **Test connection**. La respuesta `meta` incluye `spreadsheetUrl`.
 
 ## 5) Endpoints esperados
-- `GET` `?route=tasks&since=<ISO>` → devuelve `{ tasks, serverTime }`
-- `POST` `?route=upsert` → body `{ clientId, ops }` → devuelve `{ accepted, rejected, serverTime }`
-- `GET` `?route=meta` → devuelve `{ ok: true, serverTime }`
+- `GET` `?route=meta` → `{ ok, spreadsheetId, spreadsheetName, spreadsheetUrl, sheets, serverTime }`
+- `GET` `?route=tasks&since=<ISO>` → `{ ok, tasks, serverTime }`
+- `POST` `?route=upsert` → body `{ ops }` → `{ ok, applied, rejected, serverTime }`
 
-### Notas / Suposiciones
-- El Web App no tiene routing nativo, por eso se usa el query param `route` (y opcionalmente `pathInfo`) para distinguir endpoints.
+### Notas
 - `tags` se guarda como JSON string en Sheets.
+- El acceso del Web App debe ser **Anyone with link** para el MVP.

@@ -26,9 +26,10 @@ export interface SyncExportPayload {
 export interface QueueOp {
   opId: string;
   taskId: string;
-  type: "upsert";
-  task: Task;
+  type: "upsert" | "delete";
+  task?: Task;
   createdAt: string;
+  baseRevision?: number;
 }
 
 export async function getTasksCache(): Promise<Task[]> {

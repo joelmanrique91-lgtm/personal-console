@@ -2,7 +2,7 @@ import React, { createContext, useContext, useEffect, useMemo, useReducer } from
 import { runMigrations } from "./migrations";
 import { AppState, FocusSession, Task, TaskStatus } from "./types";
 import { endOfWeek, startOfDay, startOfWeek } from "../utils/date";
-import { enqueueUpsert } from "../sync/queue";
+import { enqueueDelete, enqueueUpsert } from "../sync/queue";
 import { getFocusSessions, getTasksCache, setFocusSessions, setTasksCache } from "../sync/storage";
 
 const initialState: AppState = {
@@ -154,6 +154,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const now = new Date().toISOString();
       const nextTask: Task = {
         ...task,
+        tags: task.tags ?? [],
         updatedAt: now,
         revision: existing ? existing.revision + 1 : task.revision
       };
@@ -199,7 +200,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         revision: task.revision + 1
       };
       dispatch({ type: "update-task", payload: nextTask });
-      void enqueueUpsert(nextTask);
+      void enqueueDelete(nextTask);
     };
     const addSession = (session: FocusSession) => {
       dispatch({ type: "add-session", payload: session });
@@ -247,6 +248,7 @@ export function buildEmptyTask(overrides: Partial<Task>): Task {
     status: overrides.status ?? "inbox",
     priority: overrides.priority ?? "med",
     stream: overrides.stream ?? "otro",
+    tags: overrides.tags ?? [],
     estimateMin: overrides.estimateMin,
     plannedAt: overrides.plannedAt,
     dueAt: overrides.dueAt,
@@ -255,7 +257,6 @@ export function buildEmptyTask(overrides: Partial<Task>): Task {
     revision: overrides.revision ?? 1,
     deletedAt: overrides.deletedAt,
     doneAt: overrides.doneAt,
-    blockedNote: overrides.blockedNote,
-    tags: overrides.tags
+    blockedNote: overrides.blockedNote
   };
 }
