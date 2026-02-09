@@ -12,13 +12,14 @@ import { parseQuickInput } from "./utils/quickParser";
 import "./styles/app.css";
 
 const statuses: { status: TaskStatus; label: string }[] = [
-  { status: "inbox", label: "Inbox" },
+  { status: "inbox", label: "Bandeja" },
   { status: "today", label: "Hoy" },
   { status: "week", label: "Semana" },
   { status: "someday", label: "Algún día" },
   { status: "blocked", label: "Bloqueado" },
   { status: "done", label: "Hecho" }
 ];
+const statusLabels = Object.fromEntries(statuses.map(({ status, label }) => [status, label]));
 
 type View = "inbox" | "board" | "focus" | "review";
 
@@ -29,6 +30,7 @@ export function App() {
   const [priorityFilter, setPriorityFilter] = useState<TaskPriority | "all">("all");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
+  const [statusMessage, setStatusMessage] = useState("");
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -36,10 +38,21 @@ export function App() {
         event.preventDefault();
         setPaletteOpen((prev) => !prev);
       }
+      if (event.key === "Escape") {
+        setPaletteOpen(false);
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
   }, []);
+
+  useEffect(() => {
+    if (!statusMessage) {
+      return;
+    }
+    const timeout = window.setTimeout(() => setStatusMessage(""), 3000);
+    return () => window.clearTimeout(timeout);
+  }, [statusMessage]);
 
   const filteredTasks = useMemo(() => {
     return state.tasks.filter((task) => {
@@ -146,6 +159,7 @@ export function App() {
     link.download = `personal-console-${new Date().toISOString()}.json`;
     link.click();
     URL.revokeObjectURL(url);
+    setStatusMessage("Exportación lista. Revisa tus descargas.");
   };
 
   const handleImport = async (file: File) => {
@@ -153,6 +167,7 @@ export function App() {
     try {
       const parsed = JSON.parse(text) as { tasks?: Task[]; focusSessions?: unknown[] };
       if (!parsed.tasks || !Array.isArray(parsed.tasks)) {
+        setStatusMessage("El archivo no tiene tareas válidas.");
         return;
       }
       dispatch({
@@ -165,8 +180,10 @@ export function App() {
           activeTaskId: state.activeTaskId
         }
       });
+      setStatusMessage("Importación completada.");
     } catch (error) {
       console.error("Import failed", error);
+      setStatusMessage("No se pudo importar el archivo.");
     }
   };
 
@@ -179,17 +196,22 @@ export function App() {
       <header className="app-header">
         <div>
           <h1>Personal Console</h1>
-          <p>Inbox · Hoy · Semana · Algún día · Focus · Review</p>
+          <p>Bandeja · Hoy · Semana · Algún día · Enfoque · Revisión</p>
         </div>
         <div className="app-header__actions">
-          <button type="button" onClick={() => setPaletteOpen(true)}>
-            Ctrl+K
+          <button
+            type="button"
+            onClick={() => setPaletteOpen(true)}
+            aria-haspopup="dialog"
+            aria-expanded={paletteOpen}
+          >
+            Buscar (Ctrl+K)
           </button>
           <button type="button" onClick={handleExport}>
-            Export
+            Exportar
           </button>
           <label className="import-label">
-            Import
+            Importar
             <input
               type="file"
               accept="application/json"
@@ -202,15 +224,20 @@ export function App() {
             />
           </label>
         </div>
+        {statusMessage ? (
+          <div className="status-banner" role="status" aria-live="polite">
+            {statusMessage}
+          </div>
+        ) : null}
       </header>
 
       <nav className="app-nav">
         {(
           [
-            { id: "inbox", label: "Inbox" },
-            { id: "board", label: "Board" },
-            { id: "focus", label: "Focus" },
-            { id: "review", label: "Review" }
+            { id: "inbox", label: "Bandeja" },
+            { id: "board", label: "Tablero" },
+            { id: "focus", label: "Enfoque" },
+            { id: "review", label: "Revisión" }
           ] as { id: View; label: string }[]
         ).map((item) => (
           <button
@@ -244,8 +271,9 @@ export function App() {
               onStreamChange={setStreamFilter}
               onPriorityChange={setPriorityFilter}
             />
+            <p className="board-hint">Arrastra tarjetas entre columnas o usa los botones de movimiento.</p>
             {todayCount > 5 ? (
-              <p className="warning">Hoy tiene más de 5 tareas. Reducí foco.</p>
+              <p className="warning">Hoy tiene más de 5 tareas. Reduce el foco.</p>
             ) : null}
           </div>
           <div className="board">
@@ -311,7 +339,19 @@ export function App() {
 
       {paletteOpen ? (
         <div className="palette" onClick={() => setPaletteOpen(false)}>
-          <div className="palette__panel" onClick={(event) => event.stopPropagation()}>
+          <div
+            className="palette__panel"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Buscar tareas"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="palette__header">
+              <p>Buscar tareas</p>
+              <button type="button" onClick={() => setPaletteOpen(false)}>
+                Cerrar
+              </button>
+            </div>
             <input
               autoFocus
               placeholder="Buscar tareas..."
@@ -319,25 +359,29 @@ export function App() {
               onChange={(event) => setPaletteQuery(event.target.value)}
             />
             <div className="palette__results">
-              {paletteResults.map((task) => (
-                <div key={task.id} className="palette__item">
-                  <div>
-                    <strong>{task.title}</strong>
-                    <span>{task.status}</span>
+              {paletteResults.length === 0 ? (
+                <p className="palette__empty">No hay tareas que coincidan.</p>
+              ) : (
+                paletteResults.map((task) => (
+                  <div key={task.id} className="palette__item">
+                    <div>
+                      <strong>{task.title}</strong>
+                      <span>{statusLabels[task.status]}</span>
+                    </div>
+                    <div className="palette__actions">
+                      <button type="button" onClick={() => moveTask(task, "today")}>
+                        Hoy
+                      </button>
+                      <button type="button" onClick={() => moveTask(task, "week")}>
+                        Semana
+                      </button>
+                      <button type="button" onClick={() => moveTask(task, "done")}>
+                        Hecho
+                      </button>
+                    </div>
                   </div>
-                  <div className="palette__actions">
-                    <button type="button" onClick={() => moveTask(task, "today")}>
-                      Hoy
-                    </button>
-                    <button type="button" onClick={() => moveTask(task, "week")}>
-                      Semana
-                    </button>
-                    <button type="button" onClick={() => moveTask(task, "done")}>
-                      Done
-                    </button>
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         </div>

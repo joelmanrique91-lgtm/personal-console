@@ -41,7 +41,7 @@ export function ReviewSummary({
       </div>
       <div className="review-summary__actions">
         <button type="button" onClick={onMovePendingToToday}>
-          Mover pendientes a Hoy (mañana)
+          Mover pendientes a Hoy mañana
         </button>
         <button type="button" onClick={onClearTrash}>
           Borrar tareas basura

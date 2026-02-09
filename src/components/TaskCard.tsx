@@ -1,12 +1,18 @@
 import { Task, TaskStatus } from "../store/types";
 
 const statusLabels: Record<TaskStatus, string> = {
-  inbox: "Inbox",
+  inbox: "Bandeja",
   today: "Hoy",
   week: "Semana",
   someday: "Algún día",
   blocked: "Bloqueado",
   done: "Hecho"
+};
+
+const priorityLabels: Record<Task["priority"], string> = {
+  high: "Alta",
+  med: "Media",
+  low: "Baja"
 };
 
 interface TaskCardProps {
@@ -16,11 +22,27 @@ interface TaskCardProps {
 }
 
 export function TaskCard({ task, onMove, onSelect }: TaskCardProps) {
+  const isSelectable = Boolean(onSelect);
   return (
-    <div className="task-card" draggable={!!onSelect} onClick={onSelect}>
+    <div
+      className={`task-card${isSelectable ? " task-card--selectable" : ""}`}
+      draggable={isSelectable}
+      onClick={onSelect}
+      role={isSelectable ? "button" : undefined}
+      tabIndex={isSelectable ? 0 : undefined}
+      onKeyDown={(event) => {
+        if (!isSelectable) {
+          return;
+        }
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect?.();
+        }
+      }}
+    >
       <div className="task-card__header">
         <h4>{task.title}</h4>
-        <span className={`pill pill--${task.priority}`}>{task.priority}</span>
+        <span className={`pill pill--${task.priority}`}>{priorityLabels[task.priority]}</span>
       </div>
       <p className="task-card__meta">
         {task.stream}
@@ -38,7 +60,12 @@ export function TaskCard({ task, onMove, onSelect }: TaskCardProps) {
         {Object.entries(statusLabels)
           .filter(([status]) => status !== task.status)
           .map(([status, label]) => (
-            <button key={status} type="button" onClick={() => onMove(status as TaskStatus)}>
+            <button
+              key={status}
+              type="button"
+              onClick={() => onMove(status as TaskStatus)}
+              aria-label={`Mover a ${label}`}
+            >
               {label}
             </button>
           ))}

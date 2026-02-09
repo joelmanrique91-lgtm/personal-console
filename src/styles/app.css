@@ -10,6 +10,17 @@
   box-sizing: border-box;
 }
 
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  border: 0;
+}
+
 body {
   margin: 0;
   background: #f5f5f7;
@@ -69,6 +80,15 @@ button:active,
   padding: 16px;
   background: #ffffff;
   border-bottom: 1px solid #e0e0e0;
+}
+
+.status-banner {
+  background: #eef6ff;
+  border: 1px solid #c9e0ff;
+  color: #1f3c88;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 0.9rem;
 }
 
 .app-header h1 {
@@ -142,11 +162,24 @@ button:active,
   margin-bottom: 16px;
 }
 
+.task-input__label {
+  font-weight: 600;
+}
+
 .task-input input {
   flex: 1;
   padding: 10px 12px;
   border-radius: 10px;
   border: 1px solid #ccc;
+}
+
+.task-input__helper {
+  margin: 0;
+  font-size: 0.85rem;
+  color: #5a5a5f;
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
 }
 
 .task-input button {
@@ -164,6 +197,14 @@ button:active,
   border-radius: 12px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
   margin-bottom: 12px;
+}
+
+.task-card--selectable {
+  outline: 1px solid transparent;
+}
+
+.task-card--selectable:hover {
+  outline-color: #d0d0d0;
 }
 
 .task-card__header {
@@ -259,6 +300,12 @@ button:active,
   margin-bottom: 16px;
 }
 
+.board-hint {
+  margin: 0;
+  color: #5a5a5f;
+  font-size: 0.9rem;
+}
+
 .warning {
   color: #b50000;
   font-weight: 600;
@@ -336,6 +383,24 @@ button:active,
   border: 1px solid #ccc;
 }
 
+.palette__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.palette__header p {
+  margin: 0;
+  font-weight: 600;
+}
+
+.palette__empty {
+  margin: 0;
+  color: #5a5a5f;
+}
+
 .palette__item {
   display: flex;
   flex-direction: column;
@@ -386,6 +451,14 @@ button:active,
   .task-input {
     flex-direction: row;
     align-items: center;
+  }
+
+  .task-input__label {
+    min-width: 120px;
+  }
+
+  .task-input__helper {
+    margin-left: auto;
   }
 
   .task-card__header {
