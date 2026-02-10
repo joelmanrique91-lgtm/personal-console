@@ -751,3 +751,75 @@ button:active,
 .risk-pill--high { background: #ffdcb5; color: #8c4a00; }
 .risk-pill--medium { background: #ffeeb7; color: #6a5a00; }
 .risk-pill--low { background: #daf1da; color: #1f6a24; }
+
+.task-card__risk-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.task-card__due-chip {
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.task-card__due-chip--ok { background: #daf1da; color: #1f6a24; }
+.task-card__due-chip--warn { background: #ffeeb7; color: #6a5a00; }
+.task-card__due-chip--danger { background: #ffb5b5; color: #8f1212; }
+.task-card__due-chip--none { background: #ececec; color: #555; }
+
+.empty-state {
+  background: #fff;
+  border: 1px dashed #d0d0d0;
+  border-radius: 12px;
+  padding: 14px;
+  color: #555;
+}
+
+.board-column--at_limit {
+  border-color: #e3b75f;
+}
+
+.board-column--over_limit {
+  border-color: #d85b5b;
+  background: #fff7f7;
+}
+
+.board-column__meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  font-size: 0.85rem;
+}
+
+.review-alerts {
+  margin-top: 12px;
+  border-top: 1px solid #eee;
+  padding-top: 12px;
+}
+
+.review-alerts__group ul {
+  margin-top: 4px;
+}
+
+.review-alerts__group button {
+  border: none;
+  background: transparent;
+  text-decoration: underline;
+  padding: 0;
+}
+
+.focus-picker {
+  margin-top: 12px;
+  border: 1px solid #eee;
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.focus-picker ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}

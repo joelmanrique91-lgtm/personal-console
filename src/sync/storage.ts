@@ -8,6 +8,7 @@ export const FOCUS_SESSIONS_KEY = "focus_sessions";
 export const SYNC_SETTINGS_KEY = "sync_settings";
 export const CALENDAR_VIEW_KEY = "calendar.view";
 export const FOCUS_TASK_KEY = "focus.taskId";
+export const LANE_LIMITS_KEY = "board.laneLimits";
 
 export interface SyncState {
   clientId: string;
@@ -17,6 +18,8 @@ export interface SyncState {
 export interface SyncSettings {
   webAppUrl?: string;
 }
+
+export type LaneLimits = Record<"P0" | "P1" | "P2" | "P3" | "P4", number>;
 
 export type CalendarViewMode = "month" | "week";
 
@@ -94,4 +97,12 @@ export async function setFocusTaskId(taskId: string | null): Promise<void> {
     return;
   }
   await localforage.setItem(FOCUS_TASK_KEY, taskId);
+}
+
+export async function getLaneLimits(): Promise<LaneLimits | null> {
+  return (await localforage.getItem<LaneLimits>(LANE_LIMITS_KEY)) ?? null;
+}
+
+export async function setLaneLimits(limits: LaneLimits): Promise<void> {
+  await localforage.setItem(LANE_LIMITS_KEY, limits);
 }

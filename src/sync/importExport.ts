@@ -13,17 +13,22 @@ import {
   setTasksCache
 } from "./storage";
 
-export async function buildExportPayload(): Promise<SyncExportPayload> {
-  const tasks = await getTasksCache();
+export const EXPORT_SCHEMA_VERSION = 1;
+
+export async function buildExportPayload(includeDoneArchived = true): Promise<SyncExportPayload & { schemaVersion: number }> {
+  const allTasks = await getTasksCache();
+  const tasks = includeDoneArchived
+    ? allTasks
+    : allTasks.filter((task) => !["done", "archived"].includes(task.status));
   const focusSessions = await getFocusSessions();
   const opsQueue = await getOpsQueue();
   const syncState = (await getSyncState()) ?? { clientId: crypto.randomUUID() };
   await setSyncState(syncState);
-  return { tasks, focusSessions, opsQueue, syncState };
+  return { schemaVersion: EXPORT_SCHEMA_VERSION, tasks, focusSessions, opsQueue, syncState };
 }
 
 export async function importSyncPayload(
-  payload: Partial<SyncExportPayload>,
+  payload: Partial<SyncExportPayload> & { schemaVersion?: number },
   replaceTasks: (tasks: Task[]) => void,
   replaceFocusSessions: (sessions: FocusSession[]) => void
 ): Promise<QueueOp[]> {
