@@ -10,8 +10,22 @@ export interface MetaResponse {
   serverTime: string;
 }
 
+export interface DiagResponse {
+  ok: boolean;
+  spreadsheetId?: string;
+  spreadsheetUrl?: string;
+  tasksRowCount: number;
+  opsRowCount: number;
+  eventsRowCount: number;
+  focusRowCount: number;
+  serverTime: string;
+  error?: string;
+}
+
 export interface SyncResponse {
   ok?: boolean;
+  spreadsheetId?: string;
+  spreadsheetUrl?: string;
   serverTime: string;
   appliedOps: string[];
   conflicts: { opId: string; reason: string; serverTask?: Task }[];
@@ -70,6 +84,12 @@ export async function fetchMetaWithStatus(
   return fetchWithStatus<MetaResponse>(buildUrl(baseUrl, "meta"));
 }
 
+export async function fetchDiagWithStatus(
+  baseUrl: string
+): Promise<FetchStatus<DiagResponse>> {
+  return fetchWithStatus<DiagResponse>(buildUrl(baseUrl, "diag"));
+}
+
 export async function postSync(
   baseUrl: string,
   payload: SyncRequest
@@ -84,6 +104,12 @@ export async function postSync(
   );
   if (!result.ok || typeof result.body === "string") {
     throw new Error(`SYNC_ERROR_${result.status}`);
+  }
+  if (result.body.ok === false) {
+    throw new Error(result.body.error || "SYNC_BACKEND_ERROR");
+  }
+  if (result.body.error) {
+    throw new Error(result.body.error);
   }
   return result.body;
 }
