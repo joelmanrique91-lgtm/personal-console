@@ -33,6 +33,12 @@ export interface SyncResponse {
   error?: string;
 }
 
+export interface SyncHttpResult {
+  status: number;
+  ok: boolean;
+  body: SyncResponse;
+}
+
 export interface SyncRequest {
   workspaceKey: string;
   clientId: string;
@@ -93,23 +99,54 @@ export async function fetchDiagWithStatus(
 export async function postSync(
   baseUrl: string,
   payload: SyncRequest
-): Promise<SyncResponse> {
-  const result = await fetchWithStatus<SyncResponse>(
-    buildUrl(baseUrl, "sync"),
-    {
+): Promise<SyncHttpResult> {
+  const syncUrl = buildUrl(baseUrl, "sync");
+  const formBody = new URLSearchParams({
+    payload: JSON.stringify(payload)
+  }).toString();
+
+  let response: Response;
+  try {
+    response = await fetch(syncUrl, {
       method: "POST",
-      headers: { "Content-Type": "text/plain;charset=utf-8" },
-      body: JSON.stringify(payload)
+      headers: {
+        "Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"
+      },
+      body: formBody
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to fetch";
+    throw new Error(`SYNC_NETWORK_ERROR: ${message}`);
+  }
+
+  const text = await response.text();
+  let body: SyncResponse | null = null;
+  try {
+    body = text ? (JSON.parse(text) as SyncResponse) : null;
+  } catch {
+    if (!response.ok) {
+      throw new Error(`SYNC_HTTP_${response.status}: ${text || "empty response"}`);
     }
-  );
-  if (!result.ok || typeof result.body === "string") {
-    throw new Error(`SYNC_ERROR_${result.status}`);
+    throw new Error(`SYNC_PARSE_ERROR_${response.status}: ${text || "empty response"}`);
   }
-  if (result.body.ok === false) {
-    throw new Error(result.body.error || "SYNC_BACKEND_ERROR");
+
+  if (!response.ok) {
+    const backendError = body?.error ? ` ${body.error}` : "";
+    throw new Error(`SYNC_HTTP_${response.status}:${backendError || ` ${text}`}`.trim());
   }
-  if (result.body.error) {
-    throw new Error(result.body.error);
+  if (!body) {
+    throw new Error(`SYNC_EMPTY_RESPONSE_${response.status}`);
   }
-  return result.body;
+  if (body.ok === false) {
+    throw new Error(body.error || `SYNC_BACKEND_ERROR_${response.status}`);
+  }
+  if (body.error) {
+    throw new Error(body.error);
+  }
+
+  return {
+    status: response.status,
+    ok: response.ok,
+    body
+  };
 }

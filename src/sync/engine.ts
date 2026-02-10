@@ -22,19 +22,21 @@ export interface SyncOutcome {
   appliedOps: number;
   tasksPulled: number;
   statusMessage?: string;
+  responseStatus?: number;
+  responseOk?: boolean;
 }
 
 export interface SyncRequestSummary {
-  since?: string;
+  url: string;
+  workspaceKey: string;
   opsCount: number;
-  typesCount: Record<string, number>;
 }
 
 export interface SyncResponseSummary {
+  status?: number;
   ok: boolean;
   appliedOpsCount: number;
-  conflictsCount: number;
-  tasksPulledCount: number;
+  tasksCount: number;
   serverTime?: string;
   error?: string;
 }
@@ -81,17 +83,22 @@ export async function runSyncNow(
   let sentOps = 0;
   let appliedOps = 0;
   let tasksPulled = 0;
+  let responseStatus: number | undefined;
+  let responseOk: boolean | undefined;
   let queue = await getOpsQueue();
   let cached = await getTasksCache();
 
   for (const batch of chunkOps(queue)) {
     if (batch.length === 0) continue;
-    const response = await postSync(settings.webAppUrl, {
+    const syncResult = await postSync(settings.webAppUrl, {
       workspaceKey: settings.workspaceKey,
       clientId: syncState.clientId,
       since: syncState.lastServerTime,
       ops: batch
     });
+    const response = syncResult.body;
+    responseStatus = syncResult.status;
+    responseOk = syncResult.ok;
     sentOps += batch.length;
     appliedOps += response.appliedOps.length;
     tasksPulled += response.tasks.length;
@@ -111,12 +118,15 @@ export async function runSyncNow(
   }
 
   if (queue.length === 0) {
-    const response = await postSync(settings.webAppUrl, {
+    const syncResult = await postSync(settings.webAppUrl, {
       workspaceKey: settings.workspaceKey,
       clientId: syncState.clientId,
       since: syncState.lastServerTime,
       ops: []
     });
+    const response = syncResult.body;
+    responseStatus = syncResult.status;
+    responseOk = syncResult.ok;
     tasksPulled += response.tasks.length;
     cached = mergeTasks(cached, response.tasks);
     await setTasksCache(cached);
@@ -137,7 +147,9 @@ export async function runSyncNow(
       sentOps,
       appliedOps,
       tasksPulled,
-      statusMessage
+      statusMessage,
+      responseStatus,
+      responseOk
     };
   }
 
@@ -149,6 +161,8 @@ export async function runSyncNow(
     sentOps,
     appliedOps,
     tasksPulled,
+    responseStatus,
+    responseOk,
     statusMessage:
       sentOps > 0 && appliedOps === 0
         ? "Sync sin cambios: 0 ops aplicadas. Revisá SpreadsheetId/Diag."
@@ -174,19 +188,14 @@ export function useSyncEngine(replaceTasks: (tasks: Task[]) => void) {
   const [lastStatus, setLastStatus] = useState<string | null>(null);
 
   const summarizeRequest = (
-    since: string | undefined,
+    webAppUrl: string,
+    workspace: string,
     ops: { type: string }[]
-  ): SyncRequestSummary => {
-    const typesCount: Record<string, number> = {};
-    ops.forEach((op) => {
-      typesCount[op.type] = (typesCount[op.type] ?? 0) + 1;
-    });
-    return {
-      since,
-      opsCount: ops.length,
-      typesCount
-    };
-  };
+  ): SyncRequestSummary => ({
+    url: `${webAppUrl}?route=sync`,
+    workspaceKey: workspace,
+    opsCount: ops.length
+  });
 
   const canAutoSync = useCallback(async () => {
     const settings = await getSyncSettings();
@@ -210,11 +219,15 @@ export function useSyncEngine(replaceTasks: (tasks: Task[]) => void) {
     setLastError(null);
     setLastStatus("Sincronizando...");
     try {
-      const syncState = await ensureSyncState();
+      const settings = await getSyncSettings();
       await queueFlush();
       const queue = await getOpsQueue();
       setLastSyncRequestSummary(
-        summarizeRequest(syncState.lastServerTime, queue)
+        summarizeRequest(
+          settings.webAppUrl ?? "",
+          settings.workspaceKey ?? "",
+          queue
+        )
       );
       const outcome = await runSyncNow(replaceTasks);
       setConflictsResolved(outcome.conflictsResolved);
@@ -223,10 +236,13 @@ export function useSyncEngine(replaceTasks: (tasks: Task[]) => void) {
       setLastSyncAt(new Date().toISOString());
       setLastStatus(outcome.statusMessage ?? "Sync completado.");
       setLastSyncResponseSummary({
-        ok: outcome.appliedOps > 0 || outcome.sentOps === 0,
+        status: outcome.responseStatus,
+        ok:
+          typeof outcome.responseOk === "boolean"
+            ? outcome.responseOk
+            : outcome.appliedOps > 0 || outcome.sentOps === 0,
         appliedOpsCount: outcome.appliedOps,
-        conflictsCount: outcome.conflictsResolved,
-        tasksPulledCount: outcome.tasksPulled,
+        tasksCount: outcome.tasksPulled,
         serverTime: outcome.lastServerTime,
         error: outcome.sentOps > 0 && outcome.appliedOps === 0
           ? "SYNC_ZERO_APPLIED"
@@ -237,12 +253,12 @@ export function useSyncEngine(replaceTasks: (tasks: Task[]) => void) {
       const message =
         error instanceof Error ? error.message : "SYNC_UNKNOWN_ERROR";
       setLastError(message);
-      setLastStatus("Sync con error.");
+      setLastStatus(message);
       setLastSyncResponseSummary({
         ok: false,
+        status: undefined,
         appliedOpsCount: 0,
-        conflictsCount: 0,
-        tasksPulledCount: 0,
+        tasksCount: 0,
         error: message
       });
       throw error;
