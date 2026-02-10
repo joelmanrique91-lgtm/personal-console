@@ -1,48 +1,28 @@
-# QA Checklist manual — Personal Console
+# QA Checklist
 
-## 1) Entrada / triage
-- [ ] Crear tarea nueva sin fecha.
-- [ ] Verificar que se crea con `status=backlog` y `priorityLane=P4`.
-- [ ] Verificar que aparece en tab **Entrada**.
-- [ ] Desde la tarjeta, asignar carril y fecha.
-- [ ] Cambiar estado rápido a `in_progress`, `blocked` y `archived`.
+## Empty states
+- [ ] Entrada muestra: “No hay tareas nuevas. Capturá una arriba o importá un archivo.” cuando no hay backlog.
+- [ ] Tablero muestra: “No hay tareas con este filtro.” cuando filtros devuelven 0.
+- [ ] Calendario muestra estado vacío cuando no hay tareas con fecha.
+- [ ] Revisión muestra “Todo bajo control hoy ✅” cuando no existen alertas.
 
-## 2) Tablero (semántica)
-- [ ] Abrir tab **Tablero**.
-- [ ] Confirmar que solo existen 5 columnas: P0, P1, P2, P3, P4.
-- [ ] Confirmar que no hay columnas “Bandeja”, “Bloqueado” ni “Hecho”.
-- [ ] Arrastrar tarea entre columnas y verificar que cambia solo `priorityLane`.
-- [ ] Marcar tarea como `done` y confirmar que desaparece por defecto.
-- [ ] Activar “Mostrar hechas y archivadas” y confirmar que vuelve a verse.
+## Foco
+- [ ] Se puede fijar foco desde una tarjeta del tablero con 🎯.
+- [ ] “Sugerir foco” pide confirmación si ya había foco.
+- [ ] Selector “Cambiar foco” permite búsqueda y reemplazo.
 
-## 3) Bloqueo con motivo
-- [ ] En tarjeta, usar acción **Bloquear**.
-- [ ] Confirmar prompt de motivo.
-- [ ] Confirmar que la tarjeta muestra estado bloqueada.
-- [ ] Confirmar que se completa `blockedSince` al primer bloqueo.
+## Detalle de tarea
+- [ ] Editar lane/status/dueDate/effort/tags persiste al recargar.
+- [ ] Si status=blocked, exige motivo y muestra “bloqueada desde”.
+- [ ] Riesgo y reasons se ven en modo read-only.
+- [ ] Borrar solicita confirmación irreversible.
 
-## 4) Foco del día
-- [ ] Seleccionar tarea desde Tablero (clic tarjeta).
-- [ ] Abrir tab **Foco del día** y confirmar que se mantiene la tarea seleccionada.
-- [ ] Usar botón **Sugerir foco** sin tarea seleccionada.
-- [ ] Verificar priorización por riesgo en P0/P1 (fallback riesgo global).
-- [ ] Usar acciones rápidas: En curso, Hecha, Bloquear, mover carril, cambiar fecha.
+## Límites por carril
+- [ ] Header muestra “Al límite” cuando count == limit.
+- [ ] Header muestra “Sobrecargado” cuando count > limit.
+- [ ] Mover a P0/P1 bloquea si excede límite y muestra mensaje de guía.
+- [ ] Configuración guarda límites P0..P4 en storage local.
 
-## 5) Calendario unificado
-- [ ] Abrir tab **Calendario** (única tab).
-- [ ] Cambiar selector **Mes/Semana** dentro de la vista.
-- [ ] Verificar que solo aparecen tareas con `dueDate`.
-- [ ] Verificar que los ítems muestran etiqueta de carril (P0..P4).
-- [ ] Navegar Anterior/Siguiente en ambas vistas.
-
-## 6) Settings / sync opcional
-- [ ] Ir a **Configuración** y leer bloque “¿Para qué sirve esto?”.
-- [ ] Con URL vacía: confirmar aviso claro y botones de sync deshabilitados.
-- [ ] Con URL cargada: confirmar habilitación de “Probar conexión”, “Enviar tarea de prueba” y “Sincronizar ahora”.
-- [ ] Confirmar que la app sigue usable offline/local sin URL.
-
-## 7) Riesgo y orden
-- [ ] Crear tarea vencida y verificar banda `critical` + razón “Tarea vencida”.
-- [ ] Crear tarea con vencimiento <=3 días y verificar banda `high` + razón “Vence pronto”.
-- [ ] Bloquear tarea por >=3 días y verificar razón correspondiente.
-- [ ] Confirmar orden en carril: riskBand desc, riskScore desc, dueDate asc (sin fecha al final).
+## Revisión
+- [ ] Alertas accionables listan: vencidas, <=72h, bloqueadas, sin actividad, carriles sobre límite.
+- [ ] Cada alerta tiene links clickeables al detalle de tarea.

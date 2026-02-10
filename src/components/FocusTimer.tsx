@@ -5,27 +5,33 @@ import { formatMinutes } from "../utils/date";
 interface FocusTimerProps {
   task?: Task;
   sessions: FocusSession[];
+  candidates: Task[];
   onAddSession: (minutes: number) => void;
   onSuggest: () => void;
   onSetStatus: (status: Status) => void;
   onSetLane: (lane: PriorityLane) => void;
   onSetDueDate: (dueDate: string) => void;
   onBlock: (note: string) => void;
+  onChangeFocus: (taskId: string) => void;
 }
 
 export function FocusTimer({
   task,
   sessions,
+  candidates,
   onAddSession,
   onSuggest,
   onSetStatus,
   onSetLane,
   onSetDueDate,
-  onBlock
+  onBlock,
+  onChangeFocus
 }: FocusTimerProps) {
   const [running, setRunning] = useState(false);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [blockedNote, setBlockedNote] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [query, setQuery] = useState("");
 
   useEffect(() => {
     if (!running) {
@@ -40,6 +46,10 @@ export function FocusTimer({
   const totalMinutes = useMemo(() => {
     return sessions.reduce((sum, session) => sum + session.minutes, 0);
   }, [sessions]);
+
+  const visibleCandidates = candidates
+    .filter((candidate) => candidate.title.toLowerCase().includes(query.toLowerCase()))
+    .slice(0, 10);
 
   const handleStop = () => {
     setRunning(false);
@@ -68,7 +78,7 @@ export function FocusTimer({
             Carril {task.priorityLane} · Estado {task.status} · Due: {task.dueDate ? new Date(task.dueDate).toLocaleDateString("es-ES") : "Sin fecha"}
           </p>
           <p>
-            Riesgo: {task.riskBand ?? "low"} {task.riskScore ? `(${task.riskScore})` : ""}
+            Riesgo: {task.riskBand ?? "low"}
           </p>
           {task.riskReasons && task.riskReasons.length > 0 ? (
             <ul>
@@ -97,6 +107,9 @@ export function FocusTimer({
               Bloquear
             </button>
             <button type="button" onClick={() => onSetStatus("done")}>Hecha</button>
+            <button type="button" onClick={() => setPickerOpen((prev) => !prev)}>
+              Cambiar foco
+            </button>
             <select
               value={task.priorityLane}
               onChange={(event) => onSetLane(event.target.value as PriorityLane)}
@@ -114,6 +127,30 @@ export function FocusTimer({
               aria-label="Cambiar fecha"
             />
           </div>
+          {pickerOpen ? (
+            <div className="focus-picker">
+              <input
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="Buscar tarea para foco"
+              />
+              <ul>
+                {visibleCandidates.map((candidate) => (
+                  <li key={candidate.id}>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onChangeFocus(candidate.id);
+                        setPickerOpen(false);
+                      }}
+                    >
+                      {candidate.title}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
           <div className="focus-card__timer">
             <span aria-live="polite">{formatMinutes(Math.round(elapsedSeconds / 60))}</span>
             <div>

@@ -30,7 +30,18 @@ interface TaskCardProps {
   onSetLane?: (lane: PriorityLane) => void;
   onSetDueDate?: (dueDate?: string) => void;
   onBlock?: () => void;
+  onSetFocus?: () => void;
   compact?: boolean;
+}
+
+function getDueSemaforo(task: Task): "ok" | "warn" | "danger" | "none" {
+  if (!task.dueDate) return "none";
+  const due = new Date(task.dueDate);
+  const now = new Date();
+  const days = Math.ceil((due.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+  if (days < 0) return "danger";
+  if (days <= 3) return "warn";
+  return "ok";
 }
 
 function dueLabel(task: Task): string {
@@ -41,12 +52,24 @@ function dueLabel(task: Task): string {
   const now = new Date();
   const days = Math.ceil((due.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
   if (days < 0) return "Vencida";
-  if (days <= 3) return "Vence pronto";
+  if (days <= 3) return `Vence en ${Math.max(days, 0)} día(s)`;
   return due.toLocaleDateString("es-ES");
 }
 
-export function TaskCard({ task, onSelect, onSetStatus, onSetLane, onSetDueDate, onBlock, compact }: TaskCardProps) {
+export function TaskCard({
+  task,
+  onSelect,
+  onSetStatus,
+  onSetLane,
+  onSetDueDate,
+  onBlock,
+  onSetFocus,
+  compact
+}: TaskCardProps) {
   const isSelectable = Boolean(onSelect);
+  const dueSemaforo = getDueSemaforo(task);
+  const topReason = task.riskReasons?.[0] ?? "Sin alertas activas";
+
   return (
     <article
       className={`task-card${isSelectable ? " task-card--selectable" : ""}`}
@@ -65,18 +88,14 @@ export function TaskCard({ task, onSelect, onSetStatus, onSetLane, onSetDueDate,
         <h4>{task.title}</h4>
         <span className={`status-chip status-chip--${task.status}`}>{statusLabels[task.status]}</span>
       </div>
-      <p className="task-card__meta">
-        {laneLabels[task.priorityLane]} · {dueLabel(task)}
-        {task.effort ? ` · ${task.effort}m` : ""}
-      </p>
-      {task.riskBand ? (
-        <p className={`risk-pill risk-pill--${task.riskBand}`}>
-          Riesgo {riskLabels[task.riskBand]}{task.riskScore ? ` (${task.riskScore})` : ""}
+      <p className="task-card__meta">{laneLabels[task.priorityLane]}</p>
+      <div className="task-card__risk-row">
+        <p className={`risk-pill risk-pill--${task.riskBand ?? "low"}`}>
+          Riesgo {riskLabels[task.riskBand ?? "low"]}
         </p>
-      ) : null}
-      {task.riskReasons && task.riskReasons.length > 0 ? (
-        <p className="task-card__notes">{task.riskReasons.slice(0, 2).join(" · ")}</p>
-      ) : null}
+        <span className={`task-card__due-chip task-card__due-chip--${dueSemaforo}`}>{dueLabel(task)}</span>
+      </div>
+      <p className="task-card__notes">{topReason}</p>
       {task.tags.length > 0 ? (
         <div className="task-card__tags">
           {task.tags.map((tag) => (
@@ -93,6 +112,11 @@ export function TaskCard({ task, onSelect, onSetStatus, onSetLane, onSetDueDate,
               <button type="button" onClick={() => onSetStatus("done")}>Hecha</button>
               <button type="button" onClick={() => onSetStatus("archived")}>Archivar</button>
             </>
+          ) : null}
+          {onSetFocus ? (
+            <button type="button" onClick={onSetFocus} title="Fijar como foco">
+              🎯 Fijar foco
+            </button>
           ) : null}
           {onSetLane ? (
             <select
@@ -111,7 +135,9 @@ export function TaskCard({ task, onSelect, onSetStatus, onSetLane, onSetDueDate,
             <input
               type="date"
               value={task.dueDate ? task.dueDate.slice(0, 10) : ""}
-              onChange={(event) => onSetDueDate(event.target.value ? new Date(event.target.value).toISOString() : undefined)}
+              onChange={(event) =>
+                onSetDueDate(event.target.value ? new Date(event.target.value).toISOString() : undefined)
+              }
               aria-label="Definir fecha"
             />
           ) : null}
