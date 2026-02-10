@@ -39,17 +39,13 @@ const SCRIPT_PROPERTY_KEY = "SPREADSHEET_ID";
 
 function doGet(e) {
   const route = getRoute_(e);
-  if (route !== "meta")
-    return jsonResponse_({ ok: false, error: "Route not found" }, 404);
-  const db = ensureDb_();
-  return jsonResponse_({
-    ok: true,
-    spreadsheetId: db.spreadsheetId,
-    spreadsheetName: db.spreadsheetName,
-    spreadsheetUrl: db.spreadsheetUrl,
-    sheets: ["Tasks", "Ops", "TaskEvents", "FocusSessions"],
-    serverTime: new Date().toISOString()
-  });
+  if (route === "meta") {
+    return jsonResponse_(meta_(), 200);
+  }
+  if (route === "diag") {
+    return jsonResponse_(diag_(), 200);
+  }
+  return jsonResponse_({ ok: false, error: "Route not found" }, 404);
 }
 
 function doPost(e) {
@@ -57,29 +53,116 @@ function doPost(e) {
   if (route !== "sync")
     return jsonResponse_({ ok: false, error: "Route not found" }, 404);
 
-  const raw =
-    e && e.postData && e.postData.contents ? e.postData.contents : "{}";
-  const body = JSON.parse(raw);
+  let body = {};
+  try {
+    body = parseBody_(e);
+  } catch (error) {
+    return jsonResponse_({ ok: false, error: String(error.message || error) }, 400);
+  }
+  const workspaceKey = String(body.workspaceKey || "").trim();
+  const ops = Array.isArray(body.ops) ? body.ops : [];
+  Logger.log(
+    "sync_request route=%s workspaceKey=%s ops=%s",
+    route,
+    workspaceKey,
+    ops.length
+  );
+  const response = sync_(body);
+  Logger.log(
+    "sync_response route=%s workspaceKey=%s spreadsheetId=%s appliedOps=%s tasksPulled=%s",
+    route,
+    workspaceKey,
+    response.spreadsheetId || "",
+    (response.appliedOps || []).length,
+    (response.tasks || []).length
+  );
+  return jsonResponse_(response, 200);
+}
+
+function parseBody_(e) {
+  const contents =
+    e && e.postData && e.postData.contents ? e.postData.contents : "";
+  if (!contents) return {};
+  try {
+    return JSON.parse(contents);
+  } catch (_) {
+    // no-op
+  }
+
+  const params = contents.split("&").reduce(function (acc, kv) {
+    const pair = kv.split("=");
+    const key = decodeURIComponent((pair[0] || "").replace(/\+/g, " "));
+    const value = decodeURIComponent((pair[1] || "").replace(/\+/g, " "));
+    acc[key] = value;
+    return acc;
+  }, {});
+
+  if (params.payload) {
+    try {
+      return JSON.parse(params.payload);
+    } catch (err) {
+      throw new Error("Invalid payload JSON");
+    }
+  }
+  return {};
+}
+
+function meta_() {
+  const db = ensureDb_();
+  return {
+    ok: true,
+    spreadsheetId: db.spreadsheetId,
+    spreadsheetName: db.spreadsheetName,
+    spreadsheetUrl: db.spreadsheetUrl,
+    sheets: ["Tasks", "Ops", "TaskEvents", "FocusSessions"],
+    serverTime: new Date().toISOString()
+  };
+}
+
+function diag_() {
+  const db = ensureDb_();
+  return {
+    ok: true,
+    spreadsheetId: db.spreadsheetId,
+    spreadsheetUrl: db.spreadsheetUrl,
+    tasksRowCount: dataRowCount_(db.tasksSheet),
+    opsRowCount: dataRowCount_(db.opsSheet),
+    eventsRowCount: dataRowCount_(db.eventsSheet),
+    focusRowCount: dataRowCount_(db.focusSheet),
+    serverTime: new Date().toISOString()
+  };
+}
+
+function sync_(body) {
   const workspaceKey = String(body.workspaceKey || "").trim();
   const clientId = String(body.clientId || "");
   const since = body.since || null;
   const ops = Array.isArray(body.ops) ? body.ops : [];
 
   if (!workspaceKey) {
-    return jsonResponse_({ ok: false, error: "workspaceKey is required" }, 400);
+    return { ok: false, error: "workspaceKey is required" };
   }
 
   const db = ensureDb_();
+  Logger.log("sync_db spreadsheetId=%s", db.spreadsheetId);
   const result = applyOps_(db, workspaceKey, clientId, ops);
   const tasks = tasksSince_(db.tasksSheet, workspaceKey, since);
+  Logger.log(
+    "sync_apply workspaceKey=%s appliedOps=%s tasksPulled=%s",
+    workspaceKey,
+    result.appliedOps.length,
+    tasks.length
+  );
 
-  return jsonResponse_({
+  return {
     ok: true,
+    spreadsheetId: db.spreadsheetId,
+    spreadsheetUrl: db.spreadsheetUrl,
     serverTime: new Date().toISOString(),
     appliedOps: result.appliedOps,
     conflicts: result.conflicts,
     tasks: tasks
-  });
+  };
 }
 
 function getRoute_(e) {
@@ -455,4 +538,8 @@ function jsonResponse_(payload, statusCode) {
   ).setMimeType(ContentService.MimeType.JSON);
   if (statusCode) return response.setResponseCode(statusCode);
   return response;
+}
+
+function dataRowCount_(sheet) {
+  return Math.max(sheet.getLastRow() - 1, 0);
 }
