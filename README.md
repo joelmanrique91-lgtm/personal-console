@@ -13,47 +13,18 @@ Web app offline-first para Inbox/Hoy/Semana/Algún día con Focus y Review diari
 
 ```bash
 npm install
-npm run dev
+npm run dev -- --host 0.0.0.0 --port 5173
 ```
 
 La app corre en `http://localhost:5173`.
 
-## Por qué el túnel bloqueaba el host (y cómo se resolvió)
-
-Vite bloquea por defecto hosts externos para evitar requests no deseados. Para desarrollo con
-Cloudflare Quick Tunnel (subdominios `*.trycloudflare.com` que cambian cada vez), se habilitó
-`server.allowedHosts` en `vite.config.ts` para permitir cualquier host **solo en el servidor
-de desarrollo**. Esto evita el error **"Blocked request. This host is not allowed"** sin afectar
-builds de producción.
-
-## Ejecutar local + túnel (Windows)
-
-```cmd
-run_local_and_tunnel.cmd
-```
-
-Este launcher:
-
-- Instala dependencias si faltan.
-- Levanta Vite en `0.0.0.0:5173`.
-- Abre el túnel con `cloudflared`.
-- Muestra la URL pública `https://*.trycloudflare.com` en la ventana de Cloudflared.
-
-Para instalar Cloudflare Tunnel:
-
-```cmd
-winget install Cloudflare.cloudflared
-```
-
-Abrí la URL del túnel en tu celular.
-
-## (Opcional) Ejecutar con Python
+## Ejecutar túnel
 
 ```bash
-python run_local_and_tunnel.py
+cloudflared tunnel --url http://localhost:5173
 ```
 
-Si `cloudflared` no está instalado, el script imprime instrucciones.
+Abrí la URL pública `https://*.trycloudflare.com` en tu celular.
 
 ## Funcionalidad
 
@@ -65,25 +36,12 @@ Si `cloudflared` no está instalado, el script imprime instrucciones.
 - **Export/Import** de JSON con merge por `id`.
 - Persistencia offline con IndexedDB (localforage).
 
-## Troubleshooting
+## Sync con Google Sheets (sin login)
 
-- **Puerto ocupado**: cambiá el puerto en `vite.config.ts` y en los scripts/launcher.
-- **Firewall Windows**: permití Node.js y cloudflared para conexiones entrantes.
-- **cloudflared no encontrado**: instalá con `winget` o `choco`.
-- **Blocked request**: asegurate de tener `server.allowedHosts` habilitado en `vite.config.ts`.
-
-## Decisiones de diseño
-
-- Se usa un store simple en React + localforage para persistencia.
-- Drag & drop implementado con HTML5 para evitar dependencias extra.
-- En móvil el board pasa a una columna vertical para facilitar el scroll.
-
-
-## Cuenta y sincronización
-
-- **Sin cuenta**: datos locales por dispositivo (offline-first).
-- **Con cuenta Google + backendUrl**: sync bidireccional en Google Sheets y mismos datos en PC/celular.
-
-Configurar `VITE_GOOGLE_CLIENT_ID` en `.env.local` para habilitar login GIS.
+- El sync usa únicamente `WebApp URL` y `Workspace`.
+- Para compartir datos entre PC y celular, ambos deben usar exactamente el mismo `webAppUrl` y `workspaceKey`.
+- La app viene preconfigurada con:
+  - `webAppUrl`: `https://script.google.com/macros/s/AKfycbxsXswsRCkAj5OePyGEVoNT5Q5N34SKmJcAEj3EpqNWryVUfS1gcPDnU7Fp42b0dickQw/exec`
+  - `workspaceKey`: `joel-main`
 
 Ver guía: `docs/SHEETS_SYNC.md`.

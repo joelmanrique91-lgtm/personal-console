@@ -1,72 +1,85 @@
-const USERS_HEADERS = ["userId", "email", "createdAt", "lastSeenAt"];
 const TASKS_HEADERS = [
-  "userId", "taskId", "title", "status", "priorityLane", "priority", "stream", "tagsJson",
-  "dueDate", "plannedAt", "estimateMin", "effort",
-  "blockedReason", "blockedSince",
-  "riskScore", "riskBand", "riskReasonsJson",
-  "createdAt", "updatedAt", "lastTouchedAt", "revision",
-  "deletedAt", "doneAt"
+  "workspaceKey",
+  "taskId",
+  "title",
+  "status",
+  "priorityLane",
+  "priority",
+  "stream",
+  "tagsJson",
+  "dueDate",
+  "plannedAt",
+  "estimateMin",
+  "effort",
+  "blockedReason",
+  "blockedSince",
+  "riskScore",
+  "riskBand",
+  "riskReasonsJson",
+  "createdAt",
+  "updatedAt",
+  "lastTouchedAt",
+  "revision",
+  "deletedAt",
+  "doneAt"
 ];
-const OPS_HEADERS = ["opId", "userId", "ts"];
-const EVENTS_HEADERS = ["eventId", "userId", "taskId", "type", "ts", "payloadJson"];
-const FOCUS_HEADERS = ["sessionId", "userId", "taskId", "minutes", "ts"];
+const OPS_HEADERS = ["workspaceKey", "opId", "ts"];
+const EVENTS_HEADERS = [
+  "eventId",
+  "workspaceKey",
+  "taskId",
+  "type",
+  "ts",
+  "payloadJson"
+];
+const FOCUS_HEADERS = ["sessionId", "workspaceKey", "taskId", "minutes", "ts"];
 
 const SPREADSHEET_NAME = "Personal Console DB";
 const SCRIPT_PROPERTY_KEY = "SPREADSHEET_ID";
 
 function doGet(e) {
   const route = getRoute_(e);
-  if (route !== "meta") return jsonResponse_({ ok: false, error: "Route not found" }, 404);
+  if (route !== "meta")
+    return jsonResponse_({ ok: false, error: "Route not found" }, 404);
   const db = ensureDb_();
   return jsonResponse_({
     ok: true,
     spreadsheetId: db.spreadsheetId,
     spreadsheetName: db.spreadsheetName,
     spreadsheetUrl: db.spreadsheetUrl,
-    sheets: ["Users", "Tasks", "Ops", "TaskEvents", "FocusSessions"],
+    sheets: ["Tasks", "Ops", "TaskEvents", "FocusSessions"],
     serverTime: new Date().toISOString()
   });
 }
 
 function doPost(e) {
   const route = getRoute_(e);
-  if (route !== "sync") return jsonResponse_({ ok: false, error: "Route not found" }, 404);
-  const raw = e && e.postData && e.postData.contents ? e.postData.contents : "{}";
-  const body = JSON.parse(raw);
-  const auth = validateIdToken_(body.idToken);
-  if (!auth.ok) return jsonResponse_({ ok: false, error: "Unauthorized" }, 401);
+  if (route !== "sync")
+    return jsonResponse_({ ok: false, error: "Route not found" }, 404);
 
-  const userId = auth.userId;
-  const email = auth.email;
+  const raw =
+    e && e.postData && e.postData.contents ? e.postData.contents : "{}";
+  const body = JSON.parse(raw);
+  const workspaceKey = String(body.workspaceKey || "").trim();
   const clientId = String(body.clientId || "");
   const since = body.since || null;
   const ops = Array.isArray(body.ops) ? body.ops : [];
 
+  if (!workspaceKey) {
+    return jsonResponse_({ ok: false, error: "workspaceKey is required" }, 400);
+  }
+
   const db = ensureDb_();
-  upsertUser_(db.usersSheet, userId, email);
-  const result = applyOps_(db, userId, clientId, ops);
-  const tasks = tasksSince_(db.tasksSheet, userId, since);
+  const result = applyOps_(db, workspaceKey, clientId, ops);
+  const tasks = tasksSince_(db.tasksSheet, workspaceKey, since);
 
   return jsonResponse_({
+    ok: true,
     serverTime: new Date().toISOString(),
     appliedOps: result.appliedOps,
     conflicts: result.conflicts,
     tasks: tasks
   });
-}
-
-function validateIdToken_(idToken) {
-  if (!idToken) return { ok: false };
-  const url = "https://oauth2.googleapis.com/tokeninfo?id_token=" + encodeURIComponent(idToken);
-  try {
-    const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-    if (response.getResponseCode() !== 200) return { ok: false };
-    const body = JSON.parse(response.getContentText());
-    if (!body.sub) return { ok: false };
-    return { ok: true, userId: String(body.sub), email: body.email ? String(body.email) : "" };
-  } catch (error) {
-    return { ok: false };
-  }
 }
 
 function getRoute_(e) {
@@ -79,7 +92,11 @@ function ensureDb_() {
   let spreadsheetId = props.getProperty(SCRIPT_PROPERTY_KEY);
   let ss = null;
   if (spreadsheetId) {
-    try { ss = SpreadsheetApp.openById(spreadsheetId); } catch (error) { ss = null; }
+    try {
+      ss = SpreadsheetApp.openById(spreadsheetId);
+    } catch (error) {
+      ss = null;
+    }
   }
   if (!ss) {
     ss = SpreadsheetApp.create(SPREADSHEET_NAME);
@@ -87,13 +104,21 @@ function ensureDb_() {
     props.setProperty(SCRIPT_PROPERTY_KEY, spreadsheetId);
   }
 
-  const usersSheet = ensureSheet_(ss, "Users", USERS_HEADERS);
   const tasksSheet = ensureSheet_(ss, "Tasks", TASKS_HEADERS);
   const opsSheet = ensureSheet_(ss, "Ops", OPS_HEADERS);
   const eventsSheet = ensureSheet_(ss, "TaskEvents", EVENTS_HEADERS);
   const focusSheet = ensureSheet_(ss, "FocusSessions", FOCUS_HEADERS);
 
-  return { ss, usersSheet, tasksSheet, opsSheet, eventsSheet, focusSheet, spreadsheetId, spreadsheetUrl: ss.getUrl(), spreadsheetName: ss.getName() };
+  return {
+    ss,
+    tasksSheet,
+    opsSheet,
+    eventsSheet,
+    focusSheet,
+    spreadsheetId,
+    spreadsheetUrl: ss.getUrl(),
+    spreadsheetName: ss.getName()
+  };
 }
 
 function ensureSheet_(ss, name, headers) {
@@ -106,65 +131,120 @@ function ensureSheet_(ss, name, headers) {
   return sheet;
 }
 
-function upsertUser_(sheet, userId, email) {
-  const data = sheet.getDataRange().getValues();
-  const now = new Date().toISOString();
-  for (let i = 1; i < data.length; i += 1) {
-    if (String(data[i][0]) === userId) {
-      sheet.getRange(i + 1, 2, 1, 3).setValues([[email || data[i][1], data[i][2] || now, now]]);
-      return;
-    }
-  }
-  sheet.appendRow([userId, email || "", now, now]);
-}
-
-function applyOps_(db, userId, clientId, ops) {
+function applyOps_(db, workspaceKey, clientId, ops) {
   const opsData = db.opsSheet.getDataRange().getValues();
   const seenOps = new Set();
   for (let i = 1; i < opsData.length; i += 1) {
-    const opId = String(opsData[i][0] || "");
-    const opUser = String(opsData[i][1] || "");
-    if (opId && opUser === userId) seenOps.add(opId);
+    const opWorkspace = String(opsData[i][0] || "");
+    const opId = String(opsData[i][1] || "");
+    if (opWorkspace === workspaceKey && opId) {
+      seenOps.add(opId);
+    }
   }
 
   const tasksData = db.tasksSheet.getDataRange().getValues();
   const idx = indexHeaders_(tasksData[0] || TASKS_HEADERS);
   const rowByKey = new Map();
   for (let i = 1; i < tasksData.length; i += 1) {
-    const key = String(tasksData[i][idx.userId]) + "::" + String(tasksData[i][idx.taskId]);
-    if (tasksData[i][idx.userId] && tasksData[i][idx.taskId]) rowByKey.set(key, i + 1);
+    const key =
+      String(tasksData[i][idx.workspaceKey]) +
+      "::" +
+      String(tasksData[i][idx.taskId]);
+    if (tasksData[i][idx.workspaceKey] && tasksData[i][idx.taskId])
+      rowByKey.set(key, i + 1);
   }
 
   const appliedOps = [];
   const conflicts = [];
 
   ops.forEach(function (op) {
-    if (!op || !op.opId || seenOps.has(op.opId)) { if (op && op.opId) appliedOps.push(op.opId); return; }
+    if (!op || !op.opId) return;
+    if (seenOps.has(op.opId)) {
+      appliedOps.push(op.opId);
+      appendEvent_(db.eventsSheet, {
+        eventId: op.opId + "-noop",
+        workspaceKey: workspaceKey,
+        taskId: op.taskId || (op.task && op.task.id) || "",
+        type: "noop",
+        ts: op.ts || new Date().toISOString(),
+        payload: { reason: "duplicate_op" }
+      });
+      return;
+    }
 
     if (op.type === "appendFocus" && op.session) {
-      db.focusSheet.appendRow([op.session.id, userId, op.session.taskId, op.session.minutes, op.session.startedAt || op.ts || new Date().toISOString()]);
-      db.opsSheet.appendRow([op.opId, userId, op.ts || new Date().toISOString()]);
+      db.focusSheet.appendRow([
+        op.session.id,
+        workspaceKey,
+        op.session.taskId,
+        op.session.minutes,
+        op.session.startedAt || op.ts || new Date().toISOString()
+      ]);
+      db.opsSheet.appendRow([
+        workspaceKey,
+        op.opId,
+        op.ts || new Date().toISOString()
+      ]);
+      appendEvent_(db.eventsSheet, {
+        eventId: op.opId + "-focus",
+        workspaceKey: workspaceKey,
+        taskId: op.session.taskId,
+        type: "focus",
+        ts: op.ts || new Date().toISOString(),
+        payload: op.session
+      });
       appliedOps.push(op.opId);
       return;
     }
 
     const taskId = String((op.task && op.task.id) || op.taskId || "");
     if (!taskId) return;
-    const key = userId + "::" + taskId;
+    const key = workspaceKey + "::" + taskId;
     const row = rowByKey.get(key);
     const now = op.ts || new Date().toISOString();
 
     if (op.type === "deleteTask") {
       if (row) {
-        const oldTask = rowToTask_(db.tasksSheet.getRange(row, 1, 1, TASKS_HEADERS.length).getValues()[0], idx);
-        oldTask.deletedAt = now;
-        oldTask.updatedAt = now;
-        oldTask.status = oldTask.status || "archived";
-        oldTask.revision = Number(oldTask.revision || 0) + 1;
-        db.tasksSheet.getRange(row, 1, 1, TASKS_HEADERS.length).setValues([taskToRow_(userId, oldTask)]);
+        const serverTask = rowToTask_(
+          db.tasksSheet
+            .getRange(row, 1, 1, TASKS_HEADERS.length)
+            .getValues()[0],
+          idx
+        );
+        serverTask.deletedAt = now;
+        serverTask.updatedAt = now;
+        serverTask.revision = Number(serverTask.revision || 0) + 1;
+        db.tasksSheet
+          .getRange(row, 1, 1, TASKS_HEADERS.length)
+          .setValues([taskToRow_(workspaceKey, serverTask)]);
+      } else {
+        db.tasksSheet.appendRow(
+          taskToRow_(workspaceKey, {
+            id: taskId,
+            title: "",
+            status: "archived",
+            priorityLane: "P4",
+            priority: "med",
+            stream: "otro",
+            tags: [],
+            createdAt: now,
+            updatedAt: now,
+            lastTouchedAt: now,
+            revision: 1,
+            deletedAt: now
+          })
+        );
+        rowByKey.set(key, db.tasksSheet.getLastRow());
       }
-      db.eventsSheet.appendRow([op.opId + "-evt", userId, taskId, "update", now, JSON.stringify({ type: "deleteTask" })]);
-      db.opsSheet.appendRow([op.opId, userId, now]);
+      db.opsSheet.appendRow([workspaceKey, op.opId, now]);
+      appendEvent_(db.eventsSheet, {
+        eventId: op.opId + "-delete",
+        workspaceKey: workspaceKey,
+        taskId: taskId,
+        type: "delete",
+        ts: now,
+        payload: { type: "deleteTask" }
+      });
       appliedOps.push(op.opId);
       return;
     }
@@ -173,26 +253,71 @@ function applyOps_(db, userId, clientId, ops) {
     const incoming = op.task;
 
     if (!row) {
-      if (incoming.status === "done" && !incoming.doneAt) incoming.doneAt = now;
-      db.tasksSheet.appendRow(taskToRow_(userId, incoming));
-      db.eventsSheet.appendRow([op.opId + "-evt", userId, taskId, "create", now, JSON.stringify(incoming)]);
-      db.opsSheet.appendRow([op.opId, userId, now]);
+      db.tasksSheet.appendRow(taskToRow_(workspaceKey, incoming));
+      rowByKey.set(key, db.tasksSheet.getLastRow());
+      db.opsSheet.appendRow([workspaceKey, op.opId, now]);
+      appendEvent_(db.eventsSheet, {
+        eventId: op.opId + "-create",
+        workspaceKey: workspaceKey,
+        taskId: taskId,
+        type: "create",
+        ts: now,
+        payload: incoming
+      });
       appliedOps.push(op.opId);
       return;
     }
 
-    const serverTask = rowToTask_(db.tasksSheet.getRange(row, 1, 1, TASKS_HEADERS.length).getValues()[0], idx);
-    if (!shouldApplyIncoming_(serverTask, incoming, clientId)) {
-      conflicts.push({ opId: op.opId, reason: "conflict", serverTask: serverTask });
-      db.opsSheet.appendRow([op.opId, userId, now]);
+    const serverTask = rowToTask_(
+      db.tasksSheet.getRange(row, 1, 1, TASKS_HEADERS.length).getValues()[0],
+      idx
+    );
+    const decision = shouldApplyIncoming_(serverTask, incoming, clientId);
+    if (decision === "conflict") {
+      conflicts.push({
+        opId: op.opId,
+        reason: "conflict",
+        serverTask: serverTask
+      });
+      db.opsSheet.appendRow([workspaceKey, op.opId, now]);
+      appendEvent_(db.eventsSheet, {
+        eventId: op.opId + "-conflict",
+        workspaceKey: workspaceKey,
+        taskId: taskId,
+        type: "conflict",
+        ts: now,
+        payload: { serverTask: serverTask, incomingTask: incoming }
+      });
       appliedOps.push(op.opId);
       return;
     }
 
-    if (incoming.status === "done" && !incoming.doneAt) incoming.doneAt = now;
-    db.tasksSheet.getRange(row, 1, 1, TASKS_HEADERS.length).setValues([taskToRow_(userId, incoming)]);
-    db.eventsSheet.appendRow([op.opId + "-evt", userId, taskId, "update", now, JSON.stringify(incoming)]);
-    db.opsSheet.appendRow([op.opId, userId, now]);
+    if (decision === "server") {
+      db.opsSheet.appendRow([workspaceKey, op.opId, now]);
+      appendEvent_(db.eventsSheet, {
+        eventId: op.opId + "-noop",
+        workspaceKey: workspaceKey,
+        taskId: taskId,
+        type: "noop",
+        ts: now,
+        payload: { reason: "server_wins" }
+      });
+      appliedOps.push(op.opId);
+      return;
+    }
+
+    db.tasksSheet
+      .getRange(row, 1, 1, TASKS_HEADERS.length)
+      .setValues([taskToRow_(workspaceKey, incoming)]);
+    db.opsSheet.appendRow([workspaceKey, op.opId, now]);
+    appendEvent_(db.eventsSheet, {
+      eventId: op.opId + "-update",
+      workspaceKey: workspaceKey,
+      taskId: taskId,
+      type: "update",
+      ts: now,
+      payload: incoming
+    });
     appliedOps.push(op.opId);
   });
 
@@ -202,21 +327,26 @@ function applyOps_(db, userId, clientId, ops) {
 function shouldApplyIncoming_(serverTask, incomingTask, clientId) {
   const su = String(serverTask.updatedAt || "");
   const iu = String(incomingTask.updatedAt || "");
-  if (iu !== su) return iu > su;
+  if (iu > su) return "incoming";
+  if (iu < su) return "server";
+
   const sr = Number(serverTask.revision || 0);
   const ir = Number(incomingTask.revision || 0);
-  if (ir !== sr) return ir > sr;
-  return String(clientId || "") >= "";
+  if (ir > sr) return "incoming";
+  if (ir < sr) return "server";
+
+  if (String(clientId || "").trim()) return "conflict";
+  return "server";
 }
 
-function tasksSince_(sheet, userId, since) {
+function tasksSince_(sheet, workspaceKey, since) {
   const data = sheet.getDataRange().getValues();
   if (data.length < 2) return [];
   const idx = indexHeaders_(data[0]);
   const out = [];
   for (let i = 1; i < data.length; i += 1) {
     const row = data[i];
-    if (String(row[idx.userId]) !== userId) continue;
+    if (String(row[idx.workspaceKey]) !== workspaceKey) continue;
     const task = rowToTask_(row, idx);
     const touch = String(task.deletedAt || task.updatedAt || "");
     if (!since || touch >= since) out.push(task);
@@ -226,7 +356,9 @@ function tasksSince_(sheet, userId, since) {
 
 function indexHeaders_(headers) {
   const index = {};
-  headers.forEach(function (header, pos) { index[String(header)] = pos; });
+  headers.forEach(function (header, pos) {
+    index[String(header)] = pos;
+  });
   return index;
 }
 
@@ -250,16 +382,18 @@ function rowToTask_(row, i) {
     riskReasons: parseJson_(row[i.riskReasonsJson], []),
     createdAt: String(row[i.createdAt] || new Date().toISOString()),
     updatedAt: String(row[i.updatedAt] || new Date().toISOString()),
-    lastTouchedAt: String(row[i.lastTouchedAt] || row[i.updatedAt] || new Date().toISOString()),
+    lastTouchedAt: String(
+      row[i.lastTouchedAt] || row[i.updatedAt] || new Date().toISOString()
+    ),
     revision: Number(row[i.revision] || 1),
     deletedAt: valueOrUndefined_(row[i.deletedAt]),
     doneAt: valueOrUndefined_(row[i.doneAt])
   };
 }
 
-function taskToRow_(userId, task) {
+function taskToRow_(workspaceKey, task) {
   return [
-    userId,
+    workspaceKey,
     task.id,
     task.title || "",
     task.status || "backlog",
@@ -285,15 +419,40 @@ function taskToRow_(userId, task) {
   ];
 }
 
+function appendEvent_(sheet, event) {
+  sheet.appendRow([
+    event.eventId,
+    event.workspaceKey,
+    event.taskId || "",
+    event.type,
+    event.ts || new Date().toISOString(),
+    JSON.stringify(event.payload || {})
+  ]);
+}
+
 function parseJson_(value, fallback) {
   if (!value) return fallback;
-  try { return JSON.parse(String(value)); } catch (e) { return fallback; }
+  try {
+    return JSON.parse(String(value));
+  } catch (e) {
+    return fallback;
+  }
 }
-function valueOrUndefined_(value) { return value ? String(value) : undefined; }
-function numOrUndefined_(value) { return value === "" || value === null || value === undefined ? undefined : Number(value); }
+
+function valueOrUndefined_(value) {
+  return value ? String(value) : undefined;
+}
+
+function numOrUndefined_(value) {
+  return value === "" || value === null || value === undefined
+    ? undefined
+    : Number(value);
+}
 
 function jsonResponse_(payload, statusCode) {
-  const response = ContentService.createTextOutput(JSON.stringify(payload)).setMimeType(ContentService.MimeType.JSON);
+  const response = ContentService.createTextOutput(
+    JSON.stringify(payload)
+  ).setMimeType(ContentService.MimeType.JSON);
   if (statusCode) return response.setResponseCode(statusCode);
   return response;
 }

@@ -1,22 +1,24 @@
-# Apps Script backend (Personal Console)
+# Deploy Apps Script backend
 
-## Deploy
 1. Abrí Apps Script en tu cuenta Google.
-2. Pegá `apps-script/Code.gs` y guardá.
+2. Pegá el contenido de `Code.gs`.
 3. Deploy > New deployment > Web app.
-4. Execute as: Me.
-5. Who has access: Anyone with the link.
-6. Copiá la URL `/exec`.
-
-## Hojas creadas automáticamente
-- Users: `userId | email | createdAt | lastSeenAt`
-- Tasks: columnas completas del modelo de tarea
-- Ops: idempotencia por `opId`
-- TaskEvents: bitácora de operaciones
-- FocusSessions: sesiones de foco
+4. Execute as: **Me**.
+5. Who has access: **Anyone**.
+6. Copiá la URL que termina en `/exec`.
 
 ## Endpoints
-- `GET ?route=meta`
-- `POST ?route=sync`
 
-`route=sync` recibe body texto plano JSON con `idToken`, `clientId`, `since`, `ops`.
+- `GET ?route=meta` → metadata del spreadsheet y `spreadsheetUrl`.
+- `POST ?route=sync` (texto plano JSON):
+
+```json
+{
+  "workspaceKey": "joel-main",
+  "clientId": "uuid",
+  "since": "2026-01-01T00:00:00.000Z",
+  "ops": []
+}
+```
+
+No usa tokens de login ni validación contra Google OAuth.
