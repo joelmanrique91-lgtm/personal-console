@@ -135,6 +135,53 @@ function diag_() {
 
 function sync_(body) {
   const workspaceKey = String(body.workspaceKey || "").trim();
+  const ops = Array.isArray(body.ops) ? body.ops : [];
+  Logger.log(
+    "sync_request route=%s workspaceKey=%s ops=%s",
+    route,
+    workspaceKey,
+    ops.length
+  );
+  const response = sync_(body);
+  Logger.log(
+    "sync_response route=%s workspaceKey=%s spreadsheetId=%s appliedOps=%s tasksPulled=%s",
+    route,
+    workspaceKey,
+    response.spreadsheetId || "",
+    (response.appliedOps || []).length,
+    (response.tasks || []).length
+  );
+  return jsonResponse_(response, 200);
+}
+
+function meta_() {
+  const db = ensureDb_();
+  return {
+    ok: true,
+    spreadsheetId: db.spreadsheetId,
+    spreadsheetName: db.spreadsheetName,
+    spreadsheetUrl: db.spreadsheetUrl,
+    sheets: ["Tasks", "Ops", "TaskEvents", "FocusSessions"],
+    serverTime: new Date().toISOString()
+  };
+}
+
+function diag_() {
+  const db = ensureDb_();
+  return {
+    ok: true,
+    spreadsheetId: db.spreadsheetId,
+    spreadsheetUrl: db.spreadsheetUrl,
+    tasksRowCount: dataRowCount_(db.tasksSheet),
+    opsRowCount: dataRowCount_(db.opsSheet),
+    eventsRowCount: dataRowCount_(db.eventsSheet),
+    focusRowCount: dataRowCount_(db.focusSheet),
+    serverTime: new Date().toISOString()
+  };
+}
+
+function sync_(body) {
+  const workspaceKey = String(body.workspaceKey || "").trim();
   const clientId = String(body.clientId || "");
   const since = body.since || null;
   const ops = Array.isArray(body.ops) ? body.ops : [];
