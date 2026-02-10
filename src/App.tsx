@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { GoogleLogin } from "@react-oauth/google";
 import { BoardColumn } from "./components/BoardColumn";
 import { CalendarMode, CalendarView } from "./components/CalendarView";
 import { Filters } from "./components/Filters";
@@ -6,17 +7,21 @@ import { FocusTimer } from "./components/FocusTimer";
 import { ReviewSummary } from "./components/ReviewSummary";
 import { TaskCard } from "./components/TaskCard";
 import { TaskInput } from "./components/TaskInput";
-import { fetchMetaWithStatus, postOpsWithStatus } from "./services/api";
+import { fetchMetaWithStatus, postSync } from "./services/api";
 import { buildEmptyTask, useStore } from "./store/store";
 import { PriorityLane, RiskBand, Status, Task, TaskPriority, TaskStream } from "./store/types";
 import { useSyncEngine } from "./sync/engine";
 import { EXPORT_SCHEMA_VERSION, buildExportPayload, importSyncPayload } from "./sync/importExport";
 import {
   LaneLimits,
+  AuthSession,
+  clearAuthSession,
+  getAuthSession,
   getCalendarViewMode,
   getFocusTaskId,
   getLaneLimits,
   getSyncSettings,
+  setAuthSession,
   setCalendarViewMode,
   setFocusTaskId,
   setLaneLimits,
@@ -81,23 +86,26 @@ export function App() {
   const [priorityFilter, setPriorityFilter] = useState<TaskPriority | "all">("all");
   const [includeDoneArchivedExport, setIncludeDoneArchivedExport] = useState(true);
   const [laneLimits, setLaneLimitsState] = useState<LaneLimits>({ P0: 5, P1: 12, P2: 20, P3: 30, P4: 0 });
+  const [auth, setAuth] = useState<AuthSession | null>(null);
   const detailTitleRef = useRef<HTMLInputElement>(null);
 
-  const { syncing, pendingOps, conflictsResolved, isOnline, syncNow } =
-    useSyncEngine(actions.replaceTasks);
+  const { syncing, pendingOps, conflictsResolved, isOnline, syncNow, lastServerTime, lastSyncAt, refreshSyncState } =
+    useSyncEngine(actions.replaceTasks, Boolean(auth?.idToken));
 
   useEffect(() => {
     void (async () => {
-      const [storedMode, settings, focusTaskId, savedLimits] = await Promise.all([
+      const [storedMode, settings, focusTaskId, savedLimits, authSession] = await Promise.all([
         getCalendarViewMode(),
         getSyncSettings(),
         getFocusTaskId(),
-        getLaneLimits()
+        getLaneLimits(),
+        getAuthSession()
       ]);
       if (storedMode) setCalendarMode(storedMode);
       if (settings.webAppUrl) setWebAppUrl(settings.webAppUrl);
       if (focusTaskId) dispatch({ type: "set-active", payload: focusTaskId });
       if (savedLimits) setLaneLimitsState(savedLimits);
+      if (authSession) setAuth(authSession);
     })();
   }, [dispatch]);
 
@@ -298,6 +306,38 @@ export function App() {
     }
   };
 
+
+
+  const parseJwtClaims = (token: string): { sub?: string; email?: string; exp?: number } => {
+    try {
+      const base = token.split(".")[1];
+      const json = JSON.parse(atob(base.replace(/-/g, "+").replace(/_/g, "/")));
+      return { sub: json.sub, email: json.email, exp: json.exp };
+    } catch {
+      return {};
+    }
+  };
+
+  const handleGoogleSuccess = async (credential?: string) => {
+    if (!credential) return;
+    const claims = parseJwtClaims(credential);
+    if (!claims.sub) {
+      setStatusMessage("Token inválido: falta userId.");
+      return;
+    }
+    const expiresAt = claims.exp ? new Date(claims.exp * 1000).toISOString() : new Date(Date.now() + 45 * 60 * 1000).toISOString();
+    const session: AuthSession = { idToken: credential, userId: claims.sub, email: claims.email, expiresAt };
+    await setAuthSession(session);
+    setAuth(session);
+    setStatusMessage("Sesión iniciada.");
+    void refreshSyncState();
+  };
+
+  const handleLogout = async () => {
+    await clearAuthSession();
+    setAuth(null);
+    setStatusMessage("Sesión cerrada. Queda modo local.");
+  };
   const paletteResults = tasksWithRisk.filter((task) =>
     [task.title, ...(task.tags ?? []), task.blockedReason ?? ""].join(" ").toLowerCase().includes(paletteQuery.toLowerCase())
   );
@@ -327,11 +367,11 @@ export function App() {
 
       {view === "calendar" ? <section className="view">{calendarTasks.length===0 ? <p className="empty-state">No hay tareas con fecha. Asigná una fecha desde Entrada o Detalle.</p> : <CalendarView currentDate={calendarDate} tasks={calendarTasks} mode={calendarMode} onModeChange={setCalendarMode} onChangeDate={setCalendarDate} onDropTask={(date, taskId)=>{ const task=tasksWithRisk.find((item)=>item.id===taskId); if(!task) return; const dueDate=date.toISOString(); actions.updateTask({...task,dueDate,priorityLane:laneFromDate(dueDate)}); }} />}</section> : null}
 
-      {view === "settings" ? <section className="view"><div className="settings"><h2>Sincronización</h2><label>URL del Web App<input type="url" value={webAppUrl} placeholder="https://script.google.com/macros/s/AKfycb.../exec" onChange={(event)=>setWebAppUrl(event.target.value)} /></label>{!webAppUrl ? <p className="warning">Para sincronizar, pegá la URL del Web App. Ejemplo: https://script.google.com/macros/s/AKfycb.../exec</p> : null}<div className="settings__actions"><button type="button" onClick={async()=>{ await setSyncSettings({webAppUrl}); setStatusMessage("URL guardada.");}}>Guardar URL</button><button type="button" onClick={async()=>{ if(!webAppUrl){setConnectionStatus("Para sincronizar, pegá la URL del Web App. Si no, la app queda local."); return;} setConnectionStatus("Probando conexión..."); setMetaStatus(null); setMetaBody(null); try{ const result=await fetchMetaWithStatus(webAppUrl); setMetaStatus(result.status); setMetaBody(result.body); setConnectionStatus(result.ok?"Conexión OK.":"Conexión falló.");}catch{ setConnectionStatus("No se pudo conectar.");}}} disabled={!webAppUrl}>Probar conexión</button><button type="button" onClick={async()=>{ if(!webAppUrl){ setConnectionStatus("Para sincronizar, pegá la URL del Web App. Si no, la app queda local."); return;} const now=new Date(); const testTask=buildEmptyTask({title:`TEST_SHEET_${now.getTime()}`}); setTestStatus(null); setTestBody(null); try{ const result=await postOpsWithStatus(webAppUrl,{ops:[{opId:crypto.randomUUID(),type:"upsert",taskId:testTask.id,task:testTask,createdAt:now.toISOString()}]}); setTestStatus(result.status); setTestBody(result.body); setStatusMessage("Tarea de prueba enviada.");}catch{ setStatusMessage("No se pudo enviar la tarea de prueba.");}}} disabled={!webAppUrl}>Enviar tarea de prueba</button><button type="button" onClick={async()=>{try{await syncNow(); setStatusMessage("Sincronización completada.");}catch{ setStatusMessage("No se pudo sincronizar.");}}} disabled={!isOnline||syncing||!webAppUrl}>Sincronizar ahora</button><button type="button" onClick={async()=>{ try{ const text = await navigator.clipboard.readText(); if(text) setWebAppUrl(text.trim()); } catch { setStatusMessage("No se pudo leer portapapeles."); } }}>Pegar desde portapapeles</button></div>
+      {view === "settings" ? <section className="view"><div className="settings"><h2>Cuenta / Sync</h2>{auth ? <p>Conectado como <strong>{auth.email ?? "(sin email)"}</strong> · {auth.userId}</p> : <p className="warning">Sin cuenta: tus datos quedan solo en este dispositivo.</p>}{!auth ? <GoogleLogin onSuccess={(cred)=>void handleGoogleSuccess(cred.credential)} onError={()=>setStatusMessage("No se pudo iniciar sesión con Google.")} /> : <button type="button" onClick={()=>void handleLogout()}>Cerrar sesión</button>}<label>URL del Web App<input type="url" value={webAppUrl} placeholder="https://script.google.com/macros/s/AKfycb.../exec" onChange={(event)=>setWebAppUrl(event.target.value)} /></label>{!webAppUrl ? <p className="warning">Para sincronizar, pegá la URL del Web App. Ejemplo: https://script.google.com/macros/s/AKfycb.../exec</p> : null}<div className="settings__actions"><button type="button" onClick={async()=>{ await setSyncSettings({webAppUrl}); setStatusMessage("URL guardada.");}}>Guardar URL</button><button type="button" onClick={async()=>{ if(!webAppUrl){setConnectionStatus("Para sincronizar, pegá la URL del Web App. Si no, la app queda local."); return;} setConnectionStatus("Probando conexión..."); setMetaStatus(null); setMetaBody(null); try{ const result=await fetchMetaWithStatus(webAppUrl); setMetaStatus(result.status); setMetaBody(result.body); setConnectionStatus(result.ok?"Conexión OK.":"Conexión falló.");}catch{ setConnectionStatus("No se pudo conectar.");}}} disabled={!webAppUrl}>Probar conexión</button><button type="button" onClick={async()=>{ if(!webAppUrl){ setConnectionStatus("Para sincronizar, pegá la URL del Web App. Si no, la app queda local."); return;} const now=new Date(); const testTask=buildEmptyTask({title:`TEST_SHEET_${now.getTime()}`}); setTestStatus(null); setTestBody(null); try{ const resultBody=await postSync(webAppUrl,{idToken:auth!.idToken,clientId:crypto.randomUUID(),since:undefined,ops:[{opId:crypto.randomUUID(),type:"upsertTask",taskId:testTask.id,task:testTask,ts:now.toISOString()}]}); const result={status:200,body:resultBody}; setTestStatus(result.status); setTestBody(result.body); setStatusMessage("Tarea de prueba enviada.");}catch{ setStatusMessage("No se pudo enviar la tarea de prueba.");}}} disabled={!webAppUrl||!auth}>Enviar tarea de prueba</button><button type="button" onClick={async()=>{try{await syncNow(); setStatusMessage("Sincronización completada.");}catch{ setStatusMessage("No se pudo sincronizar.");}}} disabled={!isOnline||syncing||!webAppUrl||!auth}>Sincronizar ahora</button><button type="button" onClick={async()=>{ try{ const text = await navigator.clipboard.readText(); if(text) setWebAppUrl(text.trim()); } catch { setStatusMessage("No se pudo leer portapapeles."); } }}>Pegar desde portapapeles</button></div>
       <h3>Límites por carril</h3>
       <div className="settings__status-grid">{(["P0","P1","P2","P3","P4"] as PriorityLane[]).map((lane)=><label key={lane}>{lane}<input type="number" min={0} value={laneLimits[lane]} onChange={(event)=>setLaneLimitsState((prev)=>({...prev,[lane]:Number(event.target.value)}))} /></label>)}</div>
       <button type="button" onClick={async()=>{ await setLaneLimits(laneLimits); setStatusMessage("Límites guardados.");}}>Guardar límites</button>
-      {connectionStatus ? <p className="settings__status">{connectionStatus}</p> : null}<div className="settings__results"><div><h3>Meta response</h3><p><strong>Status:</strong> {metaStatus ?? "--"}</p><pre>{metaBody ? JSON.stringify(metaBody, null, 2) : "--"}</pre></div><div><h3>TEST task response</h3><p><strong>Status:</strong> {testStatus ?? "--"}</p><pre>{testBody ? JSON.stringify(testBody, null, 2) : "--"}</pre></div></div></div></section> : null}
+      {connectionStatus ? <p className="settings__status">{connectionStatus}</p> : null}<p>Último sync: {lastSyncAt ? new Date(lastSyncAt).toLocaleString("es-ES") : "--"}</p><p>Último serverTime: {lastServerTime ?? "--"}</p><p>Ops pendientes: {pendingOps}</p><div className="settings__results"><div><h3>Meta response</h3><p><strong>Status:</strong> {metaStatus ?? "--"}</p><pre>{metaBody ? JSON.stringify(metaBody, null, 2) : "--"}</pre></div><div><h3>TEST task response</h3><p><strong>Status:</strong> {testStatus ?? "--"}</p><pre>{testBody ? JSON.stringify(testBody, null, 2) : "--"}</pre></div></div>{metaBody && typeof metaBody === "object" && (metaBody as { spreadsheetUrl?: string }).spreadsheetUrl ? <button type="button" onClick={()=>window.open((metaBody as { spreadsheetUrl?: string }).spreadsheetUrl, "_blank")}>Abrir hoja</button> : null}</div></section> : null}
 
       {detailTask ? <div className="palette" onClick={() => setDetailTaskId(null)}><div className="palette__panel" onClick={(event) => event.stopPropagation()}><div className="palette__header"><p>Detalle de tarea</p><button type="button" onClick={() => setDetailTaskId(null)}>Cerrar</button></div>
       <label>Título<input ref={detailTitleRef} value={detailTask.title} onChange={(event)=>actions.updateTask({...detailTask,title:event.target.value})} /></label>

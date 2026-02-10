@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { fetchTasksSince, upsertTasks } from "../services/api";
+import { postSync } from "../services/api";
 import { Task } from "../store/types";
 import {
+  getAuthSession,
   getOpsQueue,
   getSyncSettings,
   getSyncState,
@@ -20,10 +21,8 @@ export interface SyncOutcome {
 }
 
 function isRemoteNewer(local: Task, remote: Task): boolean {
-  if (remote.revision !== local.revision) {
-    return remote.revision > local.revision;
-  }
-  return remote.updatedAt > local.updatedAt;
+  if (remote.updatedAt !== local.updatedAt) return remote.updatedAt > local.updatedAt;
+  return remote.revision > local.revision;
 }
 
 export function mergeTasks(localTasks: Task[], incoming: Task[]): Task[] {
@@ -39,141 +38,117 @@ export function mergeTasks(localTasks: Task[], incoming: Task[]): Task[] {
 
 async function ensureSyncState() {
   const existing = await getSyncState();
-  if (existing) {
-    return existing;
-  }
-  const next = { clientId: crypto.randomUUID(), lastServerTime: undefined };
+  if (existing) return existing;
+  const next = { clientId: crypto.randomUUID(), lastServerTime: undefined, lastSyncAt: undefined };
   await setSyncState(next);
   return next;
 }
 
-function shouldServerWin(local: Task | undefined, server: Task): boolean {
-  if (!local) {
-    return true;
-  }
-  return isRemoteNewer(local, server);
-}
-
-export async function runSyncNow(
-  replaceTasks: (tasks: Task[]) => void
-): Promise<SyncOutcome> {
-  const settings = await getSyncSettings();
-  if (!settings.webAppUrl) {
-    throw new Error("SYNC_URL_MISSING");
-  }
+export async function runSyncNow(replaceTasks: (tasks: Task[]) => void): Promise<SyncOutcome> {
+  const [settings, auth] = await Promise.all([getSyncSettings(), getAuthSession()]);
+  if (!settings.webAppUrl) throw new Error("SYNC_URL_MISSING");
+  if (!auth?.idToken) throw new Error("SYNC_AUTH_MISSING");
 
   const syncState = await ensureSyncState();
   let conflictsResolved = 0;
   let queue = await getOpsQueue();
   let cached = await getTasksCache();
 
-  if (queue.length > 0) {
-    for (const batch of chunkOps(queue)) {
-      const response = await upsertTasks(settings.webAppUrl, {
-        ops: batch.map((op) => ({
-          opId: op.opId,
-          type: op.type,
-          taskId: op.taskId,
-          task: op.task,
-          baseRevision: op.baseRevision,
-          createdAt: op.createdAt
-        }))
-      });
-      if (!response.ok) {
-        throw new Error("SYNC_PUSH_FAILED");
-      }
+  for (const batch of chunkOps(queue)) {
+    if (batch.length === 0) continue;
+    const response = await postSync(settings.webAppUrl, {
+      idToken: auth.idToken,
+      clientId: syncState.clientId,
+      since: syncState.lastServerTime,
+      ops: batch
+    });
 
-      if (response.applied.length > 0 || response.rejected.length > 0) {
-        queue = await dequeueOps([
-          ...response.applied,
-          ...response.rejected.map((item) => item.opId)
-        ]);
-      }
+    queue = await dequeueOps(response.appliedOps);
 
-      const rejectedWithServer = response.rejected.filter((item) => item.serverTask);
-      if (rejectedWithServer.length > 0) {
-        for (const item of rejectedWithServer) {
-          const serverTask = item.serverTask as Task;
-          const localTask = cached.find((task) => task.id === serverTask.id);
-          if (shouldServerWin(localTask, serverTask)) {
-            cached = mergeTasks(cached, [serverTask]);
-          } else if (localTask) {
-            const now = new Date().toISOString();
-            const nextTask: Task = {
-              ...localTask,
-              updatedAt: now,
-              revision: serverTask.revision + 1
-            };
-            queue = await enqueueUpsert(nextTask);
-          }
-          conflictsResolved += 1;
+    for (const conflict of response.conflicts) {
+      if (conflict.serverTask) {
+        const localTask = cached.find((task) => task.id === conflict.serverTask?.id);
+        if (!localTask || isRemoteNewer(localTask, conflict.serverTask)) {
+          cached = mergeTasks(cached, [conflict.serverTask]);
+        } else {
+          const now = new Date().toISOString();
+          queue = await enqueueUpsert({ ...localTask, updatedAt: now, revision: conflict.serverTask.revision + 1 });
         }
-        await setTasksCache(cached);
-        replaceTasks(cached);
       }
+      conflictsResolved += 1;
     }
+
+    cached = mergeTasks(cached, response.tasks);
+    await setTasksCache(cached);
+    replaceTasks(cached);
+    await setSyncState({ ...syncState, lastServerTime: response.serverTime, lastSyncAt: new Date().toISOString() });
   }
 
-  const delta = await fetchTasksSince(settings.webAppUrl, syncState.lastServerTime);
-  if (!delta.ok) {
-    throw new Error("SYNC_PULL_FAILED");
+  if (queue.length === 0) {
+    const response = await postSync(settings.webAppUrl, {
+      idToken: auth.idToken,
+      clientId: syncState.clientId,
+      since: syncState.lastServerTime,
+      ops: []
+    });
+    cached = mergeTasks(cached, response.tasks);
+    await setTasksCache(cached);
+    replaceTasks(cached);
+    await setSyncState({ ...syncState, lastServerTime: response.serverTime, lastSyncAt: new Date().toISOString() });
+    return { conflictsResolved, pendingOps: 0, lastServerTime: response.serverTime };
   }
-  cached = mergeTasks(cached, delta.tasks);
-  await setTasksCache(cached);
-  replaceTasks(cached);
-  await setSyncState({ ...syncState, lastServerTime: delta.serverTime });
 
+  const stateNow = await getSyncState();
   return {
     conflictsResolved,
     pendingOps: queue.length,
-    lastServerTime: delta.serverTime
+    lastServerTime: stateNow?.lastServerTime
   };
 }
 
-export function useSyncEngine(replaceTasks: (tasks: Task[]) => void) {
+export function useSyncEngine(replaceTasks: (tasks: Task[]) => void, enabled = true) {
   const [syncing, setSyncing] = useState(false);
   const [pendingOps, setPendingOps] = useState(0);
   const [conflictsResolved, setConflictsResolved] = useState(0);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
   const [lastServerTime, setLastServerTime] = useState<string | undefined>(undefined);
+  const [lastSyncAt, setLastSyncAt] = useState<string | undefined>(undefined);
 
   const refreshPending = useCallback(async () => {
     const queue = await getOpsQueue();
     setPendingOps(queue.length);
   }, []);
 
-  const refreshLastServerTime = useCallback(async () => {
+  const refreshSyncState = useCallback(async () => {
     const syncState = await getSyncState();
     setLastServerTime(syncState?.lastServerTime);
+    setLastSyncAt(syncState?.lastSyncAt);
   }, []);
 
   const syncNow = useCallback(async () => {
+    if (!enabled) return;
     setSyncing(true);
     try {
       const outcome = await runSyncNow(replaceTasks);
       setConflictsResolved(outcome.conflictsResolved);
       setPendingOps(outcome.pendingOps);
       setLastServerTime(outcome.lastServerTime);
+      setLastSyncAt(new Date().toISOString());
       return outcome;
     } finally {
       setSyncing(false);
     }
-  }, [replaceTasks]);
+  }, [enabled, replaceTasks]);
 
   useEffect(() => {
     void refreshPending();
-    void refreshLastServerTime();
-  }, [refreshLastServerTime, refreshPending]);
+    void refreshSyncState();
+  }, [refreshSyncState, refreshPending]);
 
   useEffect(() => {
     const handleOnline = () => {
       setIsOnline(true);
-      void (async () => {
-        const settings = await getSyncSettings();
-        if (settings.webAppUrl) {
-          await syncNow();
-        }
-      })();
+      if (enabled) void syncNow();
     };
     const handleOffline = () => setIsOnline(false);
     window.addEventListener("online", handleOnline);
@@ -182,29 +157,25 @@ export function useSyncEngine(replaceTasks: (tasks: Task[]) => void) {
       window.removeEventListener("online", handleOnline);
       window.removeEventListener("offline", handleOffline);
     };
-  }, [syncNow]);
+  }, [enabled, syncNow]);
 
   useEffect(() => {
-    if (!isOnline) {
-      return;
-    }
+    if (!isOnline || !enabled) return;
     const interval = window.setInterval(() => {
       if (!syncing) {
         void (async () => {
-          const settings = await getSyncSettings();
-          if (settings.webAppUrl) {
-            await syncNow();
-          }
+          const queue = await getOpsQueue();
+          if (queue.length > 0) await syncNow();
         })();
       }
     }, AUTO_SYNC_INTERVAL_MS);
     return () => window.clearInterval(interval);
-  }, [isOnline, syncNow, syncing]);
+  }, [enabled, isOnline, syncNow, syncing]);
 
   const status = useMemo(
-    () => ({ syncing, pendingOps, conflictsResolved, isOnline, lastServerTime }),
-    [conflictsResolved, isOnline, lastServerTime, pendingOps, syncing]
+    () => ({ syncing, pendingOps, conflictsResolved, isOnline, lastServerTime, lastSyncAt }),
+    [conflictsResolved, isOnline, lastServerTime, pendingOps, syncing, lastSyncAt]
   );
 
-  return { ...status, syncNow, refreshPending };
+  return { ...status, syncNow, refreshPending, refreshSyncState };
 }

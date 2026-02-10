@@ -1,26 +1,34 @@
-import { Task } from "../store/types";
+import { FocusSession, Task } from "../store/types";
 import { QueueOp, getOpsQueue, setOpsQueue } from "./storage";
 
 const MAX_QUEUE_BATCH = 100;
 
 export function compactQueue(ops: QueueOp[]): QueueOp[] {
-  const byTask = new Map<string, QueueOp>();
+  const taskOps = new Map<string, QueueOp>();
+  const passthrough: QueueOp[] = [];
+
   ops.forEach((op) => {
-    const existing = byTask.get(op.taskId);
+    if (op.type === "appendFocus") {
+      passthrough.push(op);
+      return;
+    }
+    if (!op.taskId) return;
+    const existing = taskOps.get(op.taskId);
     if (!existing) {
-      byTask.set(op.taskId, op);
+      taskOps.set(op.taskId, op);
       return;
     }
-    if (existing.type === "delete") {
+    if (op.type === "deleteTask") {
+      taskOps.set(op.taskId, op);
       return;
     }
-    if (op.type === "delete") {
-      byTask.set(op.taskId, op);
+    if (existing.type === "deleteTask") {
       return;
     }
-    byTask.set(op.taskId, op);
+    taskOps.set(op.taskId, op);
   });
-  return Array.from(byTask.values()).sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+
+  return [...taskOps.values(), ...passthrough].sort((a, b) => a.ts.localeCompare(b.ts));
 }
 
 export async function enqueueUpsert(task: Task): Promise<QueueOp[]> {
@@ -28,9 +36,9 @@ export async function enqueueUpsert(task: Task): Promise<QueueOp[]> {
   const op: QueueOp = {
     opId: crypto.randomUUID(),
     taskId: task.id,
-    type: "upsert",
+    type: "upsertTask",
     task,
-    createdAt: new Date().toISOString()
+    ts: new Date().toISOString()
   };
   const next = compactQueue([...existing, op]);
   await setOpsQueue(next);
@@ -42,10 +50,24 @@ export async function enqueueDelete(task: Task): Promise<QueueOp[]> {
   const op: QueueOp = {
     opId: crypto.randomUUID(),
     taskId: task.id,
-    type: "delete",
+    type: "deleteTask",
     task,
-    createdAt: new Date().toISOString(),
+    ts: new Date().toISOString(),
     baseRevision: task.revision
+  };
+  const next = compactQueue([...existing, op]);
+  await setOpsQueue(next);
+  return next;
+}
+
+export async function enqueueFocusSession(session: FocusSession): Promise<QueueOp[]> {
+  const existing = await getOpsQueue();
+  const op: QueueOp = {
+    opId: crypto.randomUUID(),
+    taskId: session.taskId,
+    type: "appendFocus",
+    session,
+    ts: session.startedAt
   };
   const next = compactQueue([...existing, op]);
   await setOpsQueue(next);
@@ -57,10 +79,6 @@ export async function dequeueOps(opIds: string[]): Promise<QueueOp[]> {
   const remaining = existing.filter((op) => !opIds.includes(op.opId));
   await setOpsQueue(remaining);
   return remaining;
-}
-
-export async function replaceQueue(ops: QueueOp[]): Promise<void> {
-  await setOpsQueue(ops);
 }
 
 export function chunkOps(ops: QueueOp[]): QueueOp[][] {
