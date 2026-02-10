@@ -201,10 +201,17 @@ export async function postSync(
   try {
     body = text ? (JSON.parse(text) as SyncResponse) : null;
   } catch {
+    const staleHint = text.includes("setResponseCode is not a function")
+      ? " Apps Script desactualizado: redeploy del script sin setResponseCode()."
+      : "";
     if (!response.ok) {
-      throw new Error(`SYNC_HTTP_${response.status}: ${text || "empty response"}`);
+      throw new Error(
+        `SYNC_HTTP_${response.status}: ${text || "empty response"}.${staleHint} requestUrl=${syncUrl}`
+      );
     }
-    throw new Error(`SYNC_PARSE_ERROR_${response.status}: ${text || "empty response"}`);
+    throw new Error(
+      `SYNC_PARSE_ERROR_${response.status}: ${text || "empty response"}.${staleHint} requestUrl=${syncUrl}`
+    );
   }
 
   if (!response.ok) {
