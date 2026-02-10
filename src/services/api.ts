@@ -213,11 +213,14 @@ export async function postSync(
   try {
     body = text ? (JSON.parse(text) as SyncResponse) : null;
   } catch {
-    const bodySnippet = buildBodySnippet(text || "empty response");
+    const isHtmlResponse = /<!doctype html>/i.test(text);
+    const bodySnippet = isHtmlResponse
+      ? "[html-response-omitted]"
+      : buildBodySnippet(text || "empty response");
     const staleHint = text.includes("setResponseCode is not a function")
       ? " Apps Script desactualizado: redeploy del script sin setResponseCode()."
       : "";
-    const upstreamHtmlHint = text.includes("<!DOCTYPE html>")
+    const upstreamHtmlHint = isHtmlResponse
       ? " Upstream devolvió HTML en vez de JSON."
       : "";
     if (!response.ok) {
