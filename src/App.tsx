@@ -836,7 +836,7 @@ export function App() {
               <input
                 type="url"
                 value={webAppUrl}
-                placeholder="/api"
+                placeholder="https://personal-console-sync-proxy.joel-personal-console.workers.dev/api"
                 onChange={(event) => setWebAppUrl(event.target.value)}
               />
             </label>
@@ -861,7 +861,7 @@ export function App() {
                   if (normalizedUrl !== webAppUrl.trim()) {
                     setWebAppUrl(normalizedUrl);
                     setStatusMessage(
-                      "URL de Google detectada. Se migró automáticamente a /api."
+                      "URL normalizada automáticamente."
                     );
                   } else {
                     setStatusMessage("Settings de sync guardados.");
@@ -876,25 +876,46 @@ export function App() {
                   const effectiveBase = resolveEffectiveSyncBase(webAppUrl.trim());
                   try {
                     const meta = await fetchMetaWithStatus(effectiveBase);
-                    if (
-                      meta.ok &&
-                      typeof meta.body === "object" &&
-                      meta.body &&
-                      "serverTime" in meta.body
-                    ) {
-                      const body = meta.body as {
-                        serverTime?: string;
-                        spreadsheetId?: string;
-                        spreadsheetUrl?: string;
-                      };
-                      setSpreadsheetId(body.spreadsheetId ?? null);
-                      setSpreadsheetUrl(body.spreadsheetUrl ?? null);
+                    const body =
+                      typeof meta.body === "object" && meta.body
+                        ? (meta.body as {
+                            ok?: boolean;
+                            error?: string;
+                            serverTime?: string;
+                            spreadsheetId?: string;
+                            spreadsheetUrl?: string;
+                          })
+                        : null;
+
+                    if (!meta.ok) {
+                      const errorMessage =
+                        body?.error ||
+                        (meta.status === 404 ? "Route not found" : "HTTP error");
                       setLastStatus(
-                        `Conexión OK. serverTime=${body.serverTime ?? "--"}`
+                        `Conexión fallida (${meta.status}): ${errorMessage}. requestUrl=${meta.requestUrl}`
                       );
-                    } else {
-                      setLastStatus("Conexión fallida: respuesta inválida.");
+                      return;
                     }
+
+                    if (!body) {
+                      setLastStatus(
+                        `Conexión fallida: respuesta inválida. requestUrl=${meta.requestUrl}`
+                      );
+                      return;
+                    }
+
+                    if (body.ok === false) {
+                      setLastStatus(
+                        `Conexión fallida: ${body.error || "ok:false"}. requestUrl=${meta.requestUrl}`
+                      );
+                      return;
+                    }
+
+                    setSpreadsheetId(body.spreadsheetId ?? null);
+                    setSpreadsheetUrl(body.spreadsheetUrl ?? null);
+                    setLastStatus(
+                      `Conexión OK. serverTime=${body.serverTime ?? "--"}. requestUrl=${meta.requestUrl}`
+                    );
                   } catch (error) {
                     setLastStatus(
                       error instanceof Error
@@ -913,7 +934,7 @@ export function App() {
                   const nextUrl = resolveEffectiveSyncBase(webAppUrl.trim());
                   if (nextUrl !== webAppUrl.trim()) {
                     setWebAppUrl(nextUrl);
-                    setStatusMessage("URL de Google detectada. Se usa proxy /api.");
+                    setStatusMessage("URL normalizada automáticamente.");
                   }
                   const nextWorkspace = workspaceKey.trim();
                   if (!nextUrl || !nextWorkspace) {
