@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { postSync } from "../services/api";
+import { postSync, resolveEffectiveSyncBase } from "../services/api";
 import { Task } from "../store/types";
 import {
   getOpsQueue,
@@ -24,12 +24,15 @@ export interface SyncOutcome {
   statusMessage?: string;
   responseStatus?: number;
   responseOk?: boolean;
+  lastRequestUrl?: string;
+  lastResponseBodyPreview?: string;
 }
 
 export interface SyncRequestSummary {
   url: string;
   workspaceKey: string;
   opsCount: number;
+  effectiveSyncBase: string;
 }
 
 export interface SyncResponseSummary {
@@ -39,6 +42,8 @@ export interface SyncResponseSummary {
   tasksCount: number;
   serverTime?: string;
   error?: string;
+  lastRequestUrl?: string;
+  lastResponseBodyPreview?: string;
 }
 
 function isRemoteNewer(local: Task, remote: Task): boolean {
@@ -85,6 +90,8 @@ export async function runSyncNow(
   let tasksPulled = 0;
   let responseStatus: number | undefined;
   let responseOk: boolean | undefined;
+  let lastRequestUrl: string | undefined;
+  let lastResponseBodyPreview: string | undefined;
   let queue = await getOpsQueue();
   let cached = await getTasksCache();
 
@@ -99,6 +106,8 @@ export async function runSyncNow(
     const response = syncResult.body;
     responseStatus = syncResult.status;
     responseOk = syncResult.ok;
+    lastRequestUrl = syncResult.requestUrl;
+    lastResponseBodyPreview = syncResult.responseBodyPreview;
     sentOps += batch.length;
     appliedOps += response.appliedOps.length;
     tasksPulled += response.tasks.length;
@@ -127,6 +136,8 @@ export async function runSyncNow(
     const response = syncResult.body;
     responseStatus = syncResult.status;
     responseOk = syncResult.ok;
+    lastRequestUrl = syncResult.requestUrl;
+    lastResponseBodyPreview = syncResult.responseBodyPreview;
     tasksPulled += response.tasks.length;
     cached = mergeTasks(cached, response.tasks);
     await setTasksCache(cached);
@@ -149,7 +160,9 @@ export async function runSyncNow(
       tasksPulled,
       statusMessage,
       responseStatus,
-      responseOk
+      responseOk,
+      lastRequestUrl,
+      lastResponseBodyPreview
     };
   }
 
@@ -163,6 +176,8 @@ export async function runSyncNow(
     tasksPulled,
     responseStatus,
     responseOk,
+    lastRequestUrl,
+    lastResponseBodyPreview,
     statusMessage:
       sentOps > 0 && appliedOps === 0
         ? "Sync sin cambios: 0 ops aplicadas. Revisá SpreadsheetId/Diag."
@@ -192,9 +207,10 @@ export function useSyncEngine(replaceTasks: (tasks: Task[]) => void) {
     workspace: string,
     ops: { type: string }[]
   ): SyncRequestSummary => ({
-    url: `${webAppUrl}?route=sync`,
+    url: `${resolveEffectiveSyncBase(webAppUrl)}/sync`,
     workspaceKey: workspace,
-    opsCount: ops.length
+    opsCount: ops.length,
+    effectiveSyncBase: resolveEffectiveSyncBase(webAppUrl)
   });
 
   const canAutoSync = useCallback(async () => {
@@ -246,7 +262,9 @@ export function useSyncEngine(replaceTasks: (tasks: Task[]) => void) {
         serverTime: outcome.lastServerTime,
         error: outcome.sentOps > 0 && outcome.appliedOps === 0
           ? "SYNC_ZERO_APPLIED"
-          : undefined
+          : undefined,
+        lastRequestUrl: outcome.lastRequestUrl,
+        lastResponseBodyPreview: outcome.lastResponseBodyPreview
       });
       return outcome;
     } catch (error) {

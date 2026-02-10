@@ -6,7 +6,11 @@ import { FocusTimer } from "./components/FocusTimer";
 import { ReviewSummary } from "./components/ReviewSummary";
 import { TaskCard } from "./components/TaskCard";
 import { TaskInput } from "./components/TaskInput";
-import { fetchDiagWithStatus, fetchMetaWithStatus } from "./services/api";
+import {
+  fetchDiagWithStatus,
+  fetchMetaWithStatus,
+  resolveEffectiveSyncBase
+} from "./services/api";
 import { buildEmptyTask, useStore } from "./store/store";
 import {
   PriorityLane,
@@ -152,7 +156,7 @@ export function App() {
           getLaneLimits()
         ]);
       if (storedMode) setCalendarMode(storedMode);
-      if (settings.webAppUrl) setWebAppUrl(settings.webAppUrl);
+      if (settings.webAppUrl) setWebAppUrl(resolveEffectiveSyncBase(settings.webAppUrl));
       if (settings.workspaceKey) setWorkspaceKey(settings.workspaceKey);
       if (focusTaskId) dispatch({ type: "set-active", payload: focusTaskId });
       if (savedLimits) setLaneLimitsState(savedLimits);
@@ -832,7 +836,7 @@ export function App() {
               <input
                 type="url"
                 value={webAppUrl}
-                placeholder="https://script.google.com/macros/s/.../exec"
+                placeholder="/api"
                 onChange={(event) => setWebAppUrl(event.target.value)}
               />
             </label>
@@ -849,11 +853,19 @@ export function App() {
               <button
                 type="button"
                 onClick={async () => {
+                  const normalizedUrl = resolveEffectiveSyncBase(webAppUrl.trim());
                   await setSyncSettings({
-                    webAppUrl: webAppUrl.trim(),
+                    webAppUrl: normalizedUrl,
                     workspaceKey: workspaceKey.trim()
                   });
-                  setStatusMessage("Settings de sync guardados.");
+                  if (normalizedUrl !== webAppUrl.trim()) {
+                    setWebAppUrl(normalizedUrl);
+                    setStatusMessage(
+                      "URL de Google detectada. Se migró automáticamente a /api."
+                    );
+                  } else {
+                    setStatusMessage("Settings de sync guardados.");
+                  }
                 }}
               >
                 Guardar
@@ -861,7 +873,48 @@ export function App() {
               <button
                 type="button"
                 onClick={async () => {
-                  const nextUrl = webAppUrl.trim();
+                  const effectiveBase = resolveEffectiveSyncBase(webAppUrl.trim());
+                  try {
+                    const meta = await fetchMetaWithStatus(effectiveBase);
+                    if (
+                      meta.ok &&
+                      typeof meta.body === "object" &&
+                      meta.body &&
+                      "serverTime" in meta.body
+                    ) {
+                      const body = meta.body as {
+                        serverTime?: string;
+                        spreadsheetId?: string;
+                        spreadsheetUrl?: string;
+                      };
+                      setSpreadsheetId(body.spreadsheetId ?? null);
+                      setSpreadsheetUrl(body.spreadsheetUrl ?? null);
+                      setLastStatus(
+                        `Conexión OK. serverTime=${body.serverTime ?? "--"}`
+                      );
+                    } else {
+                      setLastStatus("Conexión fallida: respuesta inválida.");
+                    }
+                  } catch (error) {
+                    setLastStatus(
+                      error instanceof Error
+                        ? error.message
+                        : "No se pudo probar conexión."
+                    );
+                  }
+                }}
+                disabled={!isOnline || syncing || !webAppUrl.trim()}
+              >
+                Probar conexión
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  const nextUrl = resolveEffectiveSyncBase(webAppUrl.trim());
+                  if (nextUrl !== webAppUrl.trim()) {
+                    setWebAppUrl(nextUrl);
+                    setStatusMessage("URL de Google detectada. Se usa proxy /api.");
+                  }
                   const nextWorkspace = workspaceKey.trim();
                   if (!nextUrl || !nextWorkspace) {
                     setLastStatus(
@@ -963,7 +1016,7 @@ export function App() {
                     actions.addTask(probeTask);
                     setLastStatus("Probar escritura: sincronizando...");
                     await syncNow();
-                    const diag = await fetchDiagWithStatus(webAppUrl.trim());
+                    const diag = await fetchDiagWithStatus(resolveEffectiveSyncBase(webAppUrl.trim()));
                     if (
                       diag.ok &&
                       typeof diag.body === "object" &&
@@ -1032,6 +1085,10 @@ export function App() {
             <div className="settings__status-grid">
               <p>Debug Sync</p>
               <p>webAppUrl: {webAppUrl || "--"}</p>
+              <p>effectiveSyncBase: {resolveEffectiveSyncBase(webAppUrl || "")}</p>
+              <p>lastRequestUrl: {lastSyncResponseSummary?.lastRequestUrl ?? "--"}</p>
+              <p>lastResponseStatus: {lastSyncResponseSummary?.status ?? "--"}</p>
+              <p>lastResponseBodyPreview: {lastSyncResponseSummary?.lastResponseBodyPreview ?? "--"}</p>
               <p>workspaceKey: {workspaceKey || "--"}</p>
               <p>clientId: {clientId ?? "--"}</p>
               <p>lastServerTime: {lastServerTime ?? "--"}</p>
