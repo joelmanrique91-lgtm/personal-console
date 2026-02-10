@@ -57,6 +57,7 @@ export interface FetchStatus<T> {
 }
 
 const DEFAULT_TIMEOUT_MS = 15000;
+const KNOWN_ROUTES = new Set(["meta", "diag", "sync"]);
 
 function isGoogleScriptUrl(baseUrl: string): boolean {
   return (
@@ -65,29 +66,64 @@ function isGoogleScriptUrl(baseUrl: string): boolean {
   );
 }
 
-export function resolveEffectiveSyncBase(baseUrl: string): string {
-  const trimmed = baseUrl.trim();
-  if (!trimmed) return "/api";
-  if (isGoogleScriptUrl(trimmed)) return "/api";
-  return trimmed;
+function normalizeBasePath(pathname: string): string {
+  const segments = pathname
+    .split("/")
+    .filter(Boolean)
+    .filter((segment, index, all) => {
+      if (segment !== "api") return true;
+      return !(all[index - 1] === "api");
+    });
+
+  if (segments.length > 0 && KNOWN_ROUTES.has(segments[segments.length - 1])) {
+    segments.pop();
+  }
+
+  return `/${segments.join("/")}`.replace(/\/+$/, "") || "/";
 }
 
-function buildRouteUrl(baseUrl: string, route: string) {
+export function resolveEffectiveSyncBase(baseUrl: string): string {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) return "";
+
+  if (trimmed.startsWith("/")) {
+    return normalizeBasePath(trimmed);
+  }
+
+  try {
+    const parsed = new URL(trimmed);
+    if (isGoogleScriptUrl(trimmed)) {
+      parsed.hash = "";
+      return `${parsed.origin}${parsed.pathname}`.replace(/\/+$/, "");
+    }
+
+    parsed.hash = "";
+    parsed.search = "";
+    parsed.pathname = normalizeBasePath(parsed.pathname);
+    return parsed.toString().replace(/\/+$/, "");
+  } catch {
+    return "";
+  }
+}
+
+export function buildRouteUrl(baseUrl: string, route: "meta" | "diag" | "sync") {
   const effectiveBase = resolveEffectiveSyncBase(baseUrl);
+  if (!effectiveBase) {
+    throw new Error("SYNC_BASE_URL_INVALID: Debes ingresar una URL base válida.");
+  }
+
+  if (isGoogleScriptUrl(effectiveBase)) {
+    const parsed = new URL(effectiveBase);
+    parsed.searchParams.set("route", route);
+    return parsed.toString();
+  }
 
   if (effectiveBase.startsWith("/")) {
-    const normalizedBase = effectiveBase.replace(/\/+$/, "");
-    return `${normalizedBase}/${route}`;
+    return `${effectiveBase.replace(/\/+$/, "")}/${route}`;
   }
 
-  const parsed = new URL(effectiveBase, window.location.origin);
-  const sameOrigin = parsed.origin === window.location.origin;
-  if (sameOrigin) {
-    const normalizedPath = parsed.pathname.replace(/\/+$/, "");
-    return `${parsed.origin}${normalizedPath}/${route}`;
-  }
-
-  parsed.searchParams.set("route", route);
+  const parsed = new URL(effectiveBase);
+  parsed.pathname = `${normalizeBasePath(parsed.pathname).replace(/\/+$/, "")}/${route}`;
   return parsed.toString();
 }
 
@@ -125,13 +161,15 @@ async function fetchWithStatus<T>(
 export async function fetchMetaWithStatus(
   baseUrl: string
 ): Promise<FetchStatus<MetaResponse>> {
-  return fetchWithStatus<MetaResponse>(buildRouteUrl(baseUrl, "meta"));
+  const requestUrl = buildRouteUrl(baseUrl, "meta");
+  return fetchWithStatus<MetaResponse>(requestUrl);
 }
 
 export async function fetchDiagWithStatus(
   baseUrl: string
 ): Promise<FetchStatus<DiagResponse>> {
-  return fetchWithStatus<DiagResponse>(buildRouteUrl(baseUrl, "diag"));
+  const requestUrl = buildRouteUrl(baseUrl, "diag");
+  return fetchWithStatus<DiagResponse>(requestUrl);
 }
 
 export async function postSync(
@@ -163,21 +201,32 @@ export async function postSync(
   try {
     body = text ? (JSON.parse(text) as SyncResponse) : null;
   } catch {
+    const staleHint = text.includes("setResponseCode is not a function")
+      ? " Apps Script desactualizado: redeploy del script sin setResponseCode()."
+      : "";
     if (!response.ok) {
-      throw new Error(`SYNC_HTTP_${response.status}: ${text || "empty response"}`);
+      throw new Error(
+        `SYNC_HTTP_${response.status}: ${text || "empty response"}.${staleHint} requestUrl=${syncUrl}`
+      );
     }
-    throw new Error(`SYNC_PARSE_ERROR_${response.status}: ${text || "empty response"}`);
+    throw new Error(
+      `SYNC_PARSE_ERROR_${response.status}: ${text || "empty response"}.${staleHint} requestUrl=${syncUrl}`
+    );
   }
 
   if (!response.ok) {
-    const backendError = body?.error ? ` ${body.error}` : "";
-    throw new Error(`SYNC_HTTP_${response.status}:${backendError || ` ${text}`}`.trim());
+    const backendError = body?.error || text || "empty response";
+    throw new Error(
+      `SYNC_HTTP_${response.status}: ${backendError}. requestUrl=${syncUrl}`
+    );
   }
   if (!body) {
     throw new Error(`SYNC_EMPTY_RESPONSE_${response.status}`);
   }
   if (body.ok === false) {
-    throw new Error(body.error || `SYNC_BACKEND_ERROR_${response.status}`);
+    throw new Error(
+      `${body.error || `SYNC_BACKEND_ERROR_${response.status}`}. requestUrl=${syncUrl}`
+    );
   }
   if (body.error) {
     throw new Error(body.error);
