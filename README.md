@@ -77,3 +77,13 @@ Si `cloudflared` no está instalado, el script imprime instrucciones.
 - Se usa un store simple en React + localforage para persistencia.
 - Drag & drop implementado con HTML5 para evitar dependencias extra.
 - En móvil el board pasa a una columna vertical para facilitar el scroll.
+
+
+## Cuenta y sincronización
+
+- **Sin cuenta**: datos locales por dispositivo (offline-first).
+- **Con cuenta Google + backendUrl**: sync bidireccional en Google Sheets y mismos datos en PC/celular.
+
+Configurar `VITE_GOOGLE_CLIENT_ID` en `.env.local` para habilitar login GIS.
+
+Ver guía: `docs/SHEETS_SYNC.md`.

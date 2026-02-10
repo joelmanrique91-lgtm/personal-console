@@ -1,26 +1,5 @@
 import { Task } from "../store/types";
-
-export interface TasksResponse {
-  ok: boolean;
-  tasks: Task[];
-  serverTime: string;
-}
-
-export interface UpsertOpPayload {
-  opId: string;
-  type: "upsert" | "delete";
-  taskId: string;
-  task?: Task;
-  baseRevision?: number;
-  createdAt: string;
-}
-
-export interface UpsertResponse {
-  ok: boolean;
-  applied: string[];
-  rejected: { opId: string; reason: string; serverTask?: Task }[];
-  serverTime: string;
-}
+import { QueueOp } from "../sync/storage";
 
 export interface MetaResponse {
   ok: boolean;
@@ -31,6 +10,20 @@ export interface MetaResponse {
   serverTime: string;
 }
 
+export interface SyncResponse {
+  serverTime: string;
+  appliedOps: string[];
+  conflicts: { opId: string; reason: string; serverTask?: Task }[];
+  tasks: Task[];
+}
+
+export interface SyncRequest {
+  idToken: string;
+  clientId: string;
+  since?: string;
+  ops: QueueOp[];
+}
+
 export interface FetchStatus<T> {
   status: number;
   ok: boolean;
@@ -39,31 +32,10 @@ export interface FetchStatus<T> {
 
 const DEFAULT_TIMEOUT_MS = 15000;
 
-function buildUrl(baseUrl: string, route: string, params?: Record<string, string | undefined>) {
+function buildUrl(baseUrl: string, route: string) {
   const url = new URL(baseUrl);
   url.searchParams.set("route", route);
-  if (params) {
-    Object.entries(params).forEach(([key, value]) => {
-      if (value) {
-        url.searchParams.set(key, value);
-      }
-    });
-  }
   return url.toString();
-}
-
-async function fetchJson<T>(input: string, init?: globalThis.RequestInit): Promise<T> {
-  const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
-  try {
-    const response = await fetch(input, { ...init, signal: controller.signal });
-    if (!response.ok) {
-      throw new Error(`Request failed: ${response.status}`);
-    }
-    return (await response.json()) as T;
-  } finally {
-    window.clearTimeout(timeout);
-  }
 }
 
 async function fetchWithStatus<T>(input: string, init?: globalThis.RequestInit): Promise<FetchStatus<T>> {
@@ -84,36 +56,18 @@ async function fetchWithStatus<T>(input: string, init?: globalThis.RequestInit):
   }
 }
 
-export async function fetchTasksSince(baseUrl: string, since?: string): Promise<TasksResponse> {
-  return fetchJson<TasksResponse>(buildUrl(baseUrl, "tasks", { since }));
-}
-
-export async function upsertTasks(
-  baseUrl: string,
-  payload: { ops: UpsertOpPayload[] }
-): Promise<UpsertResponse> {
-  return fetchJson<UpsertResponse>(buildUrl(baseUrl, "upsert"), {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload)
-  });
-}
-
-export async function fetchMeta(baseUrl: string): Promise<MetaResponse> {
-  return fetchJson<MetaResponse>(buildUrl(baseUrl, "meta"));
-}
-
 export async function fetchMetaWithStatus(baseUrl: string): Promise<FetchStatus<MetaResponse>> {
   return fetchWithStatus<MetaResponse>(buildUrl(baseUrl, "meta"));
 }
 
-export async function postOpsWithStatus(
-  baseUrl: string,
-  payload: { ops: UpsertOpPayload[] }
-): Promise<FetchStatus<UpsertResponse>> {
-  return fetchWithStatus<UpsertResponse>(buildUrl(baseUrl, "upsert"), {
+export async function postSync(baseUrl: string, payload: SyncRequest): Promise<SyncResponse> {
+  const result = await fetchWithStatus<SyncResponse>(buildUrl(baseUrl, "sync"), {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
     body: JSON.stringify(payload)
   });
+  if (!result.ok || typeof result.body === "string") {
+    throw new Error(`SYNC_ERROR_${result.status}`);
+  }
+  return result.body;
 }

@@ -42,9 +42,9 @@ export async function importSyncPayload(
     tasks.map((task) => ({
       opId: crypto.randomUUID(),
       taskId: task.id,
-      type: "upsert" as const,
+      type: "upsertTask" as const,
       task,
-      createdAt: now
+      ts: now
     }))
   );
   await setOpsQueue(opsQueue);

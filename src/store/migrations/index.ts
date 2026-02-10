@@ -154,9 +154,9 @@ export async function runMigrations(): Promise<AppState | null> {
       const opsQueue: QueueOp[] = normalizedTasks.map((task) => ({
         opId: crypto.randomUUID(),
         taskId: task.id,
-        type: "upsert",
+        type: "upsertTask",
         task,
-        createdAt: now
+        ts: now
       }));
       await localforage.setItem(OPS_QUEUE_KEY, opsQueue);
     }

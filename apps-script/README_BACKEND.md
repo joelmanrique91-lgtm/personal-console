@@ -30,3 +30,6 @@ Todos usan el parámetro `route` en la misma URL `/exec`:
 ## 5) Notas
 - `tags` se guarda como JSON string en Sheets.
 - El acceso del Web App debe ser **Anyone with link** para el MVP (URL secreta).
+
+
+> Nota: backend actualizado a `route=sync` con idToken en body texto plano. Ver `apps-script/README.md`.

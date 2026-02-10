@@ -9,14 +9,23 @@ export const SYNC_SETTINGS_KEY = "sync_settings";
 export const CALENDAR_VIEW_KEY = "calendar.view";
 export const FOCUS_TASK_KEY = "focus.taskId";
 export const LANE_LIMITS_KEY = "board.laneLimits";
+export const AUTH_KEY = "auth.session";
 
 export interface SyncState {
   clientId: string;
   lastServerTime?: string;
+  lastSyncAt?: string;
 }
 
 export interface SyncSettings {
   webAppUrl?: string;
+}
+
+export interface AuthSession {
+  idToken: string;
+  userId: string;
+  email?: string;
+  expiresAt?: string;
 }
 
 export type LaneLimits = Record<"P0" | "P1" | "P2" | "P3" | "P4", number>;
@@ -32,10 +41,11 @@ export interface SyncExportPayload {
 
 export interface QueueOp {
   opId: string;
-  taskId: string;
-  type: "upsert" | "delete";
+  taskId?: string;
+  type: "upsertTask" | "deleteTask" | "appendFocus";
   task?: Task;
-  createdAt: string;
+  session?: FocusSession;
+  ts: string;
   baseRevision?: number;
 }
 
@@ -77,6 +87,18 @@ export async function getSyncSettings(): Promise<SyncSettings> {
 
 export async function setSyncSettings(settings: SyncSettings): Promise<void> {
   await localforage.setItem(SYNC_SETTINGS_KEY, settings);
+}
+
+export async function getAuthSession(): Promise<AuthSession | null> {
+  return (await localforage.getItem<AuthSession>(AUTH_KEY)) ?? null;
+}
+
+export async function setAuthSession(session: AuthSession): Promise<void> {
+  await localforage.setItem(AUTH_KEY, session);
+}
+
+export async function clearAuthSession(): Promise<void> {
+  await localforage.removeItem(AUTH_KEY);
 }
 
 export async function getCalendarViewMode(): Promise<CalendarViewMode | null> {

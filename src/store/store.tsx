@@ -1,7 +1,7 @@
 import React, { createContext, useContext, useEffect, useMemo, useReducer } from "react";
 import { runMigrations } from "./migrations";
 import { AppState, FocusSession, PriorityLane, Status, Task } from "./types";
-import { enqueueDelete, enqueueUpsert } from "../sync/queue";
+import { enqueueDelete, enqueueFocusSession, enqueueUpsert } from "../sync/queue";
 import { getFocusSessions, getTasksCache, setFocusSessions, setTasksCache } from "../sync/storage";
 import { enrichTaskRisk } from "../utils/risk";
 
@@ -199,6 +199,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
     const addSession = (session: FocusSession) => {
       dispatch({ type: "add-session", payload: session });
+      void enqueueFocusSession(session);
     };
     const bulkImport = (payload: AppState) => {
       dispatch({ type: "bulk-import", payload });
