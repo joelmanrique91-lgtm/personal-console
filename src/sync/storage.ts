@@ -11,7 +11,7 @@ export const FOCUS_TASK_KEY = "focus.taskId";
 export const LANE_LIMITS_KEY = "board.laneLimits";
 
 export const DEFAULT_BACKEND_URL =
-  "https://script.google.com/macros/s/AKfycbxsXswsRCkAj5OePyGEVoNT5Q5N34SKmJcAEj3EpqNWryVUfS1gcPDnU7Fp42b0dickQw/exec";
+  "/api";
 export const DEFAULT_WORKSPACE = "joel-main";
 
 export interface SyncState {

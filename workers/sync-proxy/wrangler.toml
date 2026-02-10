@@ -1,0 +1,6 @@
+name = "personal-console-sync-proxy"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+[vars]
+APPS_SCRIPT_EXEC = "https://script.google.com/macros/s/AKfycbxsXswsRCkAj5OePyGEVoNT5Q5N34SKmJcAEj3EpqNWryVUfS1gcPDnU7Fp42b0dickQw/exec"

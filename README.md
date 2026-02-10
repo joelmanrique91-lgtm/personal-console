@@ -41,7 +41,12 @@ Abrí la URL pública `https://*.trycloudflare.com` en tu celular.
 - El sync usa únicamente `WebApp URL` y `Workspace`.
 - Para compartir datos entre PC y celular, ambos deben usar exactamente el mismo `webAppUrl` y `workspaceKey`.
 - La app viene preconfigurada con:
-  - `webAppUrl`: `https://script.google.com/macros/s/AKfycbxsXswsRCkAj5OePyGEVoNT5Q5N34SKmJcAEj3EpqNWryVUfS1gcPDnU7Fp42b0dickQw/exec`
+  - `webAppUrl`: `/api` (o `https://<worker-domain>/api` si no es same-origin).
   - `workspaceKey`: `joel-main`
 
 Ver guía: `docs/SHEETS_SYNC.md`.
+
+
+## Proxy de Sync
+
+Para deploy y pruebas del proxy Cloudflare Worker, ver `docs/SYNC_PROXY.md`.
