@@ -11,14 +11,16 @@ export interface MetaResponse {
 }
 
 export interface SyncResponse {
+  ok?: boolean;
   serverTime: string;
   appliedOps: string[];
   conflicts: { opId: string; reason: string; serverTask?: Task }[];
   tasks: Task[];
+  error?: string;
 }
 
 export interface SyncRequest {
-  idToken: string;
+  workspaceKey: string;
   clientId: string;
   since?: string;
   ops: QueueOp[];
@@ -38,9 +40,15 @@ function buildUrl(baseUrl: string, route: string) {
   return url.toString();
 }
 
-async function fetchWithStatus<T>(input: string, init?: globalThis.RequestInit): Promise<FetchStatus<T>> {
+async function fetchWithStatus<T>(
+  input: string,
+  init?: globalThis.RequestInit
+): Promise<FetchStatus<T>> {
   const controller = new AbortController();
-  const timeout = window.setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
+  const timeout = window.setTimeout(
+    () => controller.abort(),
+    DEFAULT_TIMEOUT_MS
+  );
   try {
     const response = await fetch(input, { ...init, signal: controller.signal });
     const text = await response.text();
@@ -56,16 +64,24 @@ async function fetchWithStatus<T>(input: string, init?: globalThis.RequestInit):
   }
 }
 
-export async function fetchMetaWithStatus(baseUrl: string): Promise<FetchStatus<MetaResponse>> {
+export async function fetchMetaWithStatus(
+  baseUrl: string
+): Promise<FetchStatus<MetaResponse>> {
   return fetchWithStatus<MetaResponse>(buildUrl(baseUrl, "meta"));
 }
 
-export async function postSync(baseUrl: string, payload: SyncRequest): Promise<SyncResponse> {
-  const result = await fetchWithStatus<SyncResponse>(buildUrl(baseUrl, "sync"), {
-    method: "POST",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify(payload)
-  });
+export async function postSync(
+  baseUrl: string,
+  payload: SyncRequest
+): Promise<SyncResponse> {
+  const result = await fetchWithStatus<SyncResponse>(
+    buildUrl(baseUrl, "sync"),
+    {
+      method: "POST",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify(payload)
+    }
+  );
   if (!result.ok || typeof result.body === "string") {
     throw new Error(`SYNC_ERROR_${result.status}`);
   }

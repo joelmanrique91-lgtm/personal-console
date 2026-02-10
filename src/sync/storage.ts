@@ -9,7 +9,10 @@ export const SYNC_SETTINGS_KEY = "sync_settings";
 export const CALENDAR_VIEW_KEY = "calendar.view";
 export const FOCUS_TASK_KEY = "focus.taskId";
 export const LANE_LIMITS_KEY = "board.laneLimits";
-export const AUTH_KEY = "auth.session";
+
+export const DEFAULT_BACKEND_URL =
+  "https://script.google.com/macros/s/AKfycbxsXswsRCkAj5OePyGEVoNT5Q5N34SKmJcAEj3EpqNWryVUfS1gcPDnU7Fp42b0dickQw/exec";
+export const DEFAULT_WORKSPACE = "joel-main";
 
 export interface SyncState {
   clientId: string;
@@ -19,13 +22,7 @@ export interface SyncState {
 
 export interface SyncSettings {
   webAppUrl?: string;
-}
-
-export interface AuthSession {
-  idToken: string;
-  userId: string;
-  email?: string;
-  expiresAt?: string;
+  workspaceKey?: string;
 }
 
 export type LaneLimits = Record<"P0" | "P1" | "P2" | "P3" | "P4", number>;
@@ -77,7 +74,9 @@ export async function getFocusSessions(): Promise<FocusSession[]> {
   return (await localforage.getItem<FocusSession[]>(FOCUS_SESSIONS_KEY)) ?? [];
 }
 
-export async function setFocusSessions(focusSessions: FocusSession[]): Promise<void> {
+export async function setFocusSessions(
+  focusSessions: FocusSession[]
+): Promise<void> {
   await localforage.setItem(FOCUS_SESSIONS_KEY, focusSessions);
 }
 
@@ -85,27 +84,32 @@ export async function getSyncSettings(): Promise<SyncSettings> {
   return (await localforage.getItem<SyncSettings>(SYNC_SETTINGS_KEY)) ?? {};
 }
 
+export async function ensureDefaultSyncSettings(): Promise<SyncSettings> {
+  const existing = await getSyncSettings();
+  if (existing.webAppUrl && existing.workspaceKey) {
+    return existing;
+  }
+  const next: SyncSettings = {
+    webAppUrl: existing.webAppUrl ?? DEFAULT_BACKEND_URL,
+    workspaceKey: existing.workspaceKey ?? DEFAULT_WORKSPACE
+  };
+  await setSyncSettings(next);
+  return next;
+}
+
 export async function setSyncSettings(settings: SyncSettings): Promise<void> {
   await localforage.setItem(SYNC_SETTINGS_KEY, settings);
 }
 
-export async function getAuthSession(): Promise<AuthSession | null> {
-  return (await localforage.getItem<AuthSession>(AUTH_KEY)) ?? null;
-}
-
-export async function setAuthSession(session: AuthSession): Promise<void> {
-  await localforage.setItem(AUTH_KEY, session);
-}
-
-export async function clearAuthSession(): Promise<void> {
-  await localforage.removeItem(AUTH_KEY);
-}
-
 export async function getCalendarViewMode(): Promise<CalendarViewMode | null> {
-  return (await localforage.getItem<CalendarViewMode>(CALENDAR_VIEW_KEY)) ?? null;
+  return (
+    (await localforage.getItem<CalendarViewMode>(CALENDAR_VIEW_KEY)) ?? null
+  );
 }
 
-export async function setCalendarViewMode(mode: CalendarViewMode): Promise<void> {
+export async function setCalendarViewMode(
+  mode: CalendarViewMode
+): Promise<void> {
   await localforage.setItem(CALENDAR_VIEW_KEY, mode);
 }
 
