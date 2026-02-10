@@ -40,24 +40,24 @@ const SCRIPT_PROPERTY_KEY = "SPREADSHEET_ID";
 function doGet(e) {
   const route = getRoute_(e);
   if (route === "meta") {
-    return jsonResponse_(meta_(), 200);
+    return jsonResponse_(meta_());
   }
   if (route === "diag") {
-    return jsonResponse_(diag_(), 200);
+    return jsonResponse_(diag_());
   }
-  return jsonResponse_({ ok: false, error: "Route not found" }, 404);
+  return jsonResponse_({ ok: false, error: "Route not found" });
 }
 
 function doPost(e) {
   const route = getRoute_(e);
   if (route !== "sync")
-    return jsonResponse_({ ok: false, error: "Route not found" }, 404);
+    return jsonResponse_({ ok: false, error: "Route not found" });
 
   let body = {};
   try {
     body = parseBody_(e);
   } catch (error) {
-    return jsonResponse_({ ok: false, error: String(error.message || error) }, 400);
+    return jsonResponse_({ ok: false, error: String(error.message || error) });
   }
   const workspaceKey = String(body.workspaceKey || "").trim();
   const ops = Array.isArray(body.ops) ? body.ops : [];
@@ -76,7 +76,7 @@ function doPost(e) {
     (response.appliedOps || []).length,
     (response.tasks || []).length
   );
-  return jsonResponse_(response, 200);
+  return jsonResponse_(response);
 }
 
 function parseBody_(e) {
@@ -105,53 +105,6 @@ function parseBody_(e) {
     }
   }
   return {};
-}
-
-function meta_() {
-  const db = ensureDb_();
-  return {
-    ok: true,
-    spreadsheetId: db.spreadsheetId,
-    spreadsheetName: db.spreadsheetName,
-    spreadsheetUrl: db.spreadsheetUrl,
-    sheets: ["Tasks", "Ops", "TaskEvents", "FocusSessions"],
-    serverTime: new Date().toISOString()
-  };
-}
-
-function diag_() {
-  const db = ensureDb_();
-  return {
-    ok: true,
-    spreadsheetId: db.spreadsheetId,
-    spreadsheetUrl: db.spreadsheetUrl,
-    tasksRowCount: dataRowCount_(db.tasksSheet),
-    opsRowCount: dataRowCount_(db.opsSheet),
-    eventsRowCount: dataRowCount_(db.eventsSheet),
-    focusRowCount: dataRowCount_(db.focusSheet),
-    serverTime: new Date().toISOString()
-  };
-}
-
-function sync_(body) {
-  const workspaceKey = String(body.workspaceKey || "").trim();
-  const ops = Array.isArray(body.ops) ? body.ops : [];
-  Logger.log(
-    "sync_request route=%s workspaceKey=%s ops=%s",
-    route,
-    workspaceKey,
-    ops.length
-  );
-  const response = sync_(body);
-  Logger.log(
-    "sync_response route=%s workspaceKey=%s spreadsheetId=%s appliedOps=%s tasksPulled=%s",
-    route,
-    workspaceKey,
-    response.spreadsheetId || "",
-    (response.appliedOps || []).length,
-    (response.tasks || []).length
-  );
-  return jsonResponse_(response, 200);
 }
 
 function meta_() {
@@ -579,11 +532,10 @@ function numOrUndefined_(value) {
     : Number(value);
 }
 
-function jsonResponse_(payload, statusCode) {
+function jsonResponse_(payload) {
   const response = ContentService.createTextOutput(
     JSON.stringify(payload)
   ).setMimeType(ContentService.MimeType.JSON);
-  if (statusCode) return response.setResponseCode(statusCode);
   return response;
 }
 
