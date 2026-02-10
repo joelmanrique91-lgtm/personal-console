@@ -28,6 +28,7 @@ interface TaskCardProps {
   onSelect?: () => void;
   onSetStatus?: (status: Status) => void;
   onSetLane?: (lane: PriorityLane) => void;
+  onSetDueDate?: (dueDate?: string) => void;
   onBlock?: () => void;
   compact?: boolean;
 }
@@ -44,7 +45,7 @@ function dueLabel(task: Task): string {
   return due.toLocaleDateString("es-ES");
 }
 
-export function TaskCard({ task, onSelect, onSetStatus, onSetLane, onBlock, compact }: TaskCardProps) {
+export function TaskCard({ task, onSelect, onSetStatus, onSetLane, onSetDueDate, onBlock, compact }: TaskCardProps) {
   const isSelectable = Boolean(onSelect);
   return (
     <article
@@ -90,6 +91,7 @@ export function TaskCard({ task, onSelect, onSetStatus, onSetLane, onBlock, comp
               <button type="button" onClick={() => onSetStatus("in_progress")}>En curso</button>
               <button type="button" onClick={onBlock}>Bloquear</button>
               <button type="button" onClick={() => onSetStatus("done")}>Hecha</button>
+              <button type="button" onClick={() => onSetStatus("archived")}>Archivar</button>
             </>
           ) : null}
           {onSetLane ? (
@@ -104,6 +106,14 @@ export function TaskCard({ task, onSelect, onSetStatus, onSetLane, onBlock, comp
                 </option>
               ))}
             </select>
+          ) : null}
+          {onSetDueDate ? (
+            <input
+              type="date"
+              value={task.dueDate ? task.dueDate.slice(0, 10) : ""}
+              onChange={(event) => onSetDueDate(event.target.value ? new Date(event.target.value).toISOString() : undefined)}
+              aria-label="Definir fecha"
+            />
           ) : null}
         </div>
       ) : null}

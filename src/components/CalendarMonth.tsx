@@ -74,7 +74,7 @@ export function CalendarMonth({ currentDate, tasks, onDropTask }: CalendarMonthP
                       event.dataTransfer.setData("text/task", task.id);
                     }}
                   >
-                    {task.title}
+                    {`${task.priorityLane} · ${task.title}`}
                   </div>
                 ))}
               </div>

@@ -38,7 +38,7 @@ export function Filters({ stream, priority, onStreamChange, onPriorityChange }: 
         </select>
       </label>
       <label>
-        Prioridad
+        Prioridad interna
         <select
           value={priority}
           onChange={(event) => onPriorityChange(event.target.value as TaskPriority | "all")}

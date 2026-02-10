@@ -6,6 +6,8 @@ export const OPS_QUEUE_KEY = "ops_queue";
 export const SYNC_STATE_KEY = "sync_state";
 export const FOCUS_SESSIONS_KEY = "focus_sessions";
 export const SYNC_SETTINGS_KEY = "sync_settings";
+export const CALENDAR_VIEW_KEY = "calendar.view";
+export const FOCUS_TASK_KEY = "focus.taskId";
 
 export interface SyncState {
   clientId: string;
@@ -15,6 +17,8 @@ export interface SyncState {
 export interface SyncSettings {
   webAppUrl?: string;
 }
+
+export type CalendarViewMode = "month" | "week";
 
 export interface SyncExportPayload {
   tasks: Task[];
@@ -70,4 +74,24 @@ export async function getSyncSettings(): Promise<SyncSettings> {
 
 export async function setSyncSettings(settings: SyncSettings): Promise<void> {
   await localforage.setItem(SYNC_SETTINGS_KEY, settings);
+}
+
+export async function getCalendarViewMode(): Promise<CalendarViewMode | null> {
+  return (await localforage.getItem<CalendarViewMode>(CALENDAR_VIEW_KEY)) ?? null;
+}
+
+export async function setCalendarViewMode(mode: CalendarViewMode): Promise<void> {
+  await localforage.setItem(CALENDAR_VIEW_KEY, mode);
+}
+
+export async function getFocusTaskId(): Promise<string | null> {
+  return (await localforage.getItem<string>(FOCUS_TASK_KEY)) ?? null;
+}
+
+export async function setFocusTaskId(taskId: string | null): Promise<void> {
+  if (!taskId) {
+    await localforage.removeItem(FOCUS_TASK_KEY);
+    return;
+  }
+  await localforage.setItem(FOCUS_TASK_KEY, taskId);
 }

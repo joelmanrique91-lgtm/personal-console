@@ -60,7 +60,7 @@ export function CalendarWeek({ currentDate, tasks, onDropTask }: CalendarWeekPro
                     event.dataTransfer.setData("text/task", task.id);
                   }}
                 >
-                  {task.title}
+                  {`${task.priorityLane} · ${task.title}`}
                 </div>
               ))}
             </div>
