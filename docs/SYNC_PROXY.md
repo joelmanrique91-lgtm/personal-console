@@ -1,6 +1,6 @@
 # Sync Proxy (Cloudflare Worker)
 
-Este proxy elimina el `SYNC_NETWORK_ERROR: Failed to fetch` en browser al evitar llamadas directas a Google Apps Script desde cliente.
+Ruta estable de sync: **Frontend → Worker (URL absoluta) → Apps Script `/exec`**.
 
 ## 1) Deploy del Worker
 
@@ -11,42 +11,43 @@ wrangler login
 wrangler deploy
 ```
 
-## 2) Variable APPS_SCRIPT_EXEC
+## 2) Variable `APPS_SCRIPT_EXEC`
 
 En `workers/sync-proxy/wrangler.toml`:
 
 ```toml
 [vars]
-APPS_SCRIPT_EXEC = "https://script.google.com/macros/s/AKfycbxsXswsRCkAj5OePyGEVoNT5Q5N34SKmJcAEj3EpqNWryVUfS1gcPDnU7Fp42b0dickQw/exec"
-```
-
-Si necesitás setearla en Cloudflare:
-
-```bash
-wrangler secret put APPS_SCRIPT_EXEC
+APPS_SCRIPT_EXEC = "https://script.google.com/macros/s/AKfycbx05PRTxlEHqcofb14LnhqTDJR9JsD498nFDwJ4a3aMXBvYMjXsnWkdUa2tL7dgQq5mHg/exec"
 ```
 
 ## 3) Endpoints del proxy
 
 - `GET /api/meta` → forward a `.../exec?route=meta`
+- `GET /api/diag` → forward a `.../exec?route=diag`
 - `POST /api/sync` → forward a `.../exec?route=sync`
-- `OPTIONS` → 204 con headers CORS
+- `OPTIONS` → `204` con headers CORS
 
-## 4) Pruebas
+## 4) Happy path único del Frontend
+
+En **Settings → Sync**, usar siempre por defecto:
+
+- `WebApp URL`:
+  `https://personal-console-sync-proxy.joel-personal-console.workers.dev/api`
+- `Workspace`:
+  `joel-main`
+
+> `/api` relativo solo sirve si el mismo origen de la web app enruta `/api` al Worker.
+> No es el default recomendado.
+
+## 5) Smoke test automático
+
+Ejecutar:
 
 ```bash
-curl -i https://<tu-worker-domain>/api/meta
+./scripts/sync-smoke.sh
 ```
 
-```bash
-curl -i -X POST "https://<tu-worker-domain>/api/sync" \
-  -H "Content-Type: application/x-www-form-urlencoded;charset=UTF-8" \
-  --data-urlencode 'payload={"workspaceKey":"joel-main","clientId":"diag","ops":[]}'
-```
-
-## 5) Configuración de la app
-
-- En Settings → Sync, usar:
-  - `webAppUrl: /api` (same-origin recomendado), o
-  - `https://<tu-worker-domain>/api`
-- Si el usuario pega una URL de Google (`script.google.com` / `googleusercontent.com`), la app la migra automáticamente a `/api`.
+Valida:
+1. `GET <worker>/meta` → `ok:true`
+2. `POST <worker>/sync` → `ok:true`
+3. `GET <apps-script-exec>?route=meta` → `ok:true`

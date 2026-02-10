@@ -9,18 +9,6 @@ const CORS_HEADERS: Record<string, string> = {
   "Access-Control-Max-Age": "86400"
 };
 
-function withCors(response: Response): Response {
-  const headers = new Headers(response.headers);
-  Object.entries(CORS_HEADERS).forEach(([key, value]) => {
-    headers.set(key, value);
-  });
-  return new Response(response.body, {
-    status: response.status,
-    statusText: response.statusText,
-    headers
-  });
-}
-
 function json(status: number, payload: unknown): Response {
   const headers = new Headers({
     "Content-Type": "application/json; charset=utf-8",
@@ -33,6 +21,34 @@ function buildTargetUrl(execUrl: string, route: "meta" | "diag" | "sync"): strin
   const url = new URL(execUrl);
   url.searchParams.set("route", route);
   return url.toString();
+}
+
+async function proxyJson(
+  targetUrl: string,
+  init: RequestInit,
+  route: "meta" | "diag" | "sync"
+): Promise<Response> {
+  const upstream = await fetch(targetUrl, init);
+  const raw = await upstream.text();
+  const preview = raw.slice(0, 300);
+
+  let parsed: unknown;
+  try {
+    parsed = raw ? JSON.parse(raw) : {};
+  } catch {
+    const staleHint = raw.includes("setResponseCode is not a function")
+      ? " Apps Script desactualizado: redeploy del código sin setResponseCode()."
+      : "";
+    return json(502, {
+      ok: false,
+      error: `Invalid upstream JSON response for route=${route}.${staleHint}`,
+      upstreamStatus: upstream.status,
+      upstreamBodyPreview: preview,
+      targetUrl
+    });
+  }
+
+  return json(upstream.status, parsed);
 }
 
 export default {
@@ -50,30 +66,35 @@ export default {
       return json(500, { ok: false, error: "Missing APPS_SCRIPT_EXEC" });
     }
 
-    if (request.method === "GET" && requestUrl.pathname === "/api/meta") {
-      const upstream = await fetch(buildTargetUrl(env.APPS_SCRIPT_EXEC, "meta"), {
-        method: "GET"
-      });
-      return withCors(upstream);
-    }
+    try {
+      if (request.method === "GET" && requestUrl.pathname === "/api/meta") {
+        return proxyJson(buildTargetUrl(env.APPS_SCRIPT_EXEC, "meta"), { method: "GET" }, "meta");
+      }
 
-    if (request.method === "GET" && requestUrl.pathname === "/api/diag") {
-      const upstream = await fetch(buildTargetUrl(env.APPS_SCRIPT_EXEC, "diag"), {
-        method: "GET"
-      });
-      return withCors(upstream);
-    }
+      if (request.method === "GET" && requestUrl.pathname === "/api/diag") {
+        return proxyJson(buildTargetUrl(env.APPS_SCRIPT_EXEC, "diag"), { method: "GET" }, "diag");
+      }
 
-    if (request.method === "POST" && requestUrl.pathname === "/api/sync") {
-      const body = await request.text();
-      const upstream = await fetch(buildTargetUrl(env.APPS_SCRIPT_EXEC, "sync"), {
-        method: "POST",
-        headers: {
-          "Content-Type": request.headers.get("Content-Type") || "application/x-www-form-urlencoded;charset=UTF-8"
-        },
-        body
-      });
-      return withCors(upstream);
+      if (request.method === "POST" && requestUrl.pathname === "/api/sync") {
+        const body = await request.text();
+        return proxyJson(
+          buildTargetUrl(env.APPS_SCRIPT_EXEC, "sync"),
+          {
+            method: "POST",
+            headers: {
+              "Content-Type":
+                request.headers.get("Content-Type") ||
+                "application/x-www-form-urlencoded;charset=UTF-8"
+            },
+            body
+          },
+          "sync"
+        );
+      }
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "Upstream request failed";
+      return json(502, { ok: false, error: message });
     }
 
     return json(404, { ok: false, error: "Route not found" });
