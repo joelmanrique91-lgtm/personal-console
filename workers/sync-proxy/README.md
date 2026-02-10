@@ -21,7 +21,7 @@ El archivo `wrangler.toml` ya incluye:
 
 ```toml
 [vars]
-APPS_SCRIPT_EXEC = "https://script.google.com/macros/s/AKfycbxsXswsRCkAj5OePyGEVoNT5Q5N34SKmJcAEj3EpqNWryVUfS1gcPDnU7Fp42b0dickQw/exec"
+APPS_SCRIPT_EXEC = "https://script.google.com/macros/s/AKfycbx05PRTxlEHqcofb14LnhqTDJR9JsD498nFDwJ4a3aMXBvYMjXsnWkdUa2tL7dgQq5mHg/exec"
 ```
 
 Si querés sobrescribir la variable en Cloudflare:
@@ -51,5 +51,5 @@ curl -i -X POST "https://<tu-worker-domain>/api/sync" \
 
 ## 5) Configuración frontend
 
-- En Settings → Sync, usar `webAppUrl` = `/api` (same-origin) o `https://<tu-worker-domain>/api`.
-- No usar URL directa de Google Apps Script en browser.
+- En Settings → Sync, usar por default la URL absoluta del Worker: `https://personal-console-sync-proxy.joel-personal-console.workers.dev/api`.
+- `/api` relativo solo si ese origen realmente enruta `/api` hacia este Worker.

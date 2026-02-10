@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { postSync, resolveEffectiveSyncBase } from "../services/api";
+import { buildRouteUrl, postSync, resolveEffectiveSyncBase } from "../services/api";
 import { Task } from "../store/types";
 import {
   getOpsQueue,
@@ -206,12 +206,21 @@ export function useSyncEngine(replaceTasks: (tasks: Task[]) => void) {
     webAppUrl: string,
     workspace: string,
     ops: { type: string }[]
-  ): SyncRequestSummary => ({
-    url: `${resolveEffectiveSyncBase(webAppUrl)}/sync`,
-    workspaceKey: workspace,
-    opsCount: ops.length,
-    effectiveSyncBase: resolveEffectiveSyncBase(webAppUrl)
-  });
+  ): SyncRequestSummary => {
+    const effectiveSyncBase = resolveEffectiveSyncBase(webAppUrl);
+    let url = "--";
+    try {
+      url = buildRouteUrl(webAppUrl, "sync");
+    } catch {
+      // no-op
+    }
+    return {
+      url,
+      workspaceKey: workspace,
+      opsCount: ops.length,
+      effectiveSyncBase
+    };
+  };
 
   const canAutoSync = useCallback(async () => {
     const settings = await getSyncSettings();
