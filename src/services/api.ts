@@ -59,6 +59,18 @@ export interface FetchStatus<T> {
 const DEFAULT_TIMEOUT_MS = 15000;
 const KNOWN_ROUTES = new Set(["meta", "diag", "sync"]);
 
+
+function collapseWhitespace(value: string): string {
+  return value.replace(/\s+/g, " ").trim();
+}
+
+function buildBodySnippet(raw: string): string {
+  const normalized = collapseWhitespace(raw);
+  return normalized.length > 240
+    ? `${normalized.slice(0, 240)}…`
+    : normalized;
+}
+
 function isGoogleScriptUrl(baseUrl: string): boolean {
   return (
     baseUrl.includes("script.google.com") ||
@@ -201,16 +213,20 @@ export async function postSync(
   try {
     body = text ? (JSON.parse(text) as SyncResponse) : null;
   } catch {
+    const bodySnippet = buildBodySnippet(text || "empty response");
     const staleHint = text.includes("setResponseCode is not a function")
       ? " Apps Script desactualizado: redeploy del script sin setResponseCode()."
       : "";
+    const upstreamHtmlHint = text.includes("<!DOCTYPE html>")
+      ? " Upstream devolvió HTML en vez de JSON."
+      : "";
     if (!response.ok) {
       throw new Error(
-        `SYNC_HTTP_${response.status}: ${text || "empty response"}.${staleHint} requestUrl=${syncUrl}`
+        `SYNC_HTTP_${response.status}: ${bodySnippet}.${upstreamHtmlHint}${staleHint} requestUrl=${syncUrl}`
       );
     }
     throw new Error(
-      `SYNC_PARSE_ERROR_${response.status}: ${text || "empty response"}.${staleHint} requestUrl=${syncUrl}`
+      `SYNC_UPSTREAM_NON_JSON_${response.status}: ${bodySnippet}.${upstreamHtmlHint}${staleHint} requestUrl=${syncUrl}`
     );
   }
 
