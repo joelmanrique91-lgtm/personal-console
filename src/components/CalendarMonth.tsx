@@ -21,10 +21,10 @@ export function CalendarMonth({ currentDate, tasks, onDropTask }: CalendarMonthP
 
   const taskMap = new Map<string, Task[]>();
   tasks.forEach((task) => {
-    if (!task.plannedAt) {
+    if (!task.dueDate) {
       return;
     }
-    const key = task.plannedAt.slice(0, 10);
+    const key = task.dueDate.slice(0, 10);
     const list = taskMap.get(key) ?? [];
     list.push(task);
     taskMap.set(key, list);

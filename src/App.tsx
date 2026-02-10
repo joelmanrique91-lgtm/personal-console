@@ -1,46 +1,49 @@
 import { useEffect, useMemo, useState } from "react";
 import { BoardColumn } from "./components/BoardColumn";
-import { CalendarMonth } from "./components/CalendarMonth";
-import { CalendarWeek } from "./components/CalendarWeek";
-import { Filters } from "./components/Filters";
+import { CalendarMode, CalendarView } from "./components/CalendarView";
 import { FocusTimer } from "./components/FocusTimer";
+import { HelpHint } from "./components/HelpHint";
 import { ReviewSummary } from "./components/ReviewSummary";
 import { TaskCard } from "./components/TaskCard";
 import { TaskInput } from "./components/TaskInput";
 import { fetchMetaWithStatus, postOpsWithStatus } from "./services/api";
 import { buildEmptyTask, useStore } from "./store/store";
-import { Task, TaskPriority, TaskStatus, TaskStream } from "./store/types";
+import { PriorityLane, Status, Task } from "./store/types";
 import { useSyncEngine } from "./sync/engine";
 import { buildExportPayload, importSyncPayload } from "./sync/importExport";
 import { getSyncSettings, setSyncSettings } from "./sync/storage";
-import { endOfWeek, isSameDay, startOfWeek } from "./utils/date";
+import { isSameDay } from "./utils/date";
 import { parseQuickInput } from "./utils/quickParser";
+import { computeRisk, enrichTaskRisk } from "./utils/risk";
 import "./styles/app.css";
 
-const statuses: { status: TaskStatus; label: string }[] = [
-  { status: "inbox", label: "Bandeja" },
-  { status: "today", label: "Hoy" },
-  { status: "week", label: "Semana" },
-  { status: "someday", label: "Algún día" },
-  { status: "blocked", label: "Bloqueado" },
-  { status: "done", label: "Hecho" }
+const lanes: Array<{ lane: PriorityLane; label: string; limit: number }> = [
+  { lane: "P0", label: "P0 Hoy", limit: 5 },
+  { lane: "P1", label: "P1 Semana", limit: 12 },
+  { lane: "P2", label: "P2 Mes", limit: 20 },
+  { lane: "P3", label: "P3 60 días", limit: 30 },
+  { lane: "P4", label: "P4 Algún día", limit: 0 }
 ];
-const statusLabels = Object.fromEntries(statuses.map(({ status, label }) => [status, label]));
 
-type View =
-  | "inbox"
-  | "board"
-  | "focus"
-  | "review"
-  | "calendar-month"
-  | "calendar-week"
-  | "settings";
+const statusOptions: Status[] = ["backlog", "in_progress", "blocked", "done", "archived"];
+
+type View = "inbox" | "board" | "focus" | "review" | "calendar" | "settings";
+
+function laneFromDate(dateIso?: string): PriorityLane {
+  if (!dateIso) return "P4";
+  const now = new Date();
+  const due = new Date(dateIso);
+  const days = Math.ceil((due.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+  if (days <= 1) return "P0";
+  if (days <= 7) return "P1";
+  if (days <= 28) return "P2";
+  if (days <= 60) return "P3";
+  return "P4";
+}
 
 export function App() {
   const { state, dispatch, actions } = useStore();
   const [view, setView] = useState<View>("inbox");
-  const [streamFilter, setStreamFilter] = useState<TaskStream | "all">("all");
-  const [priorityFilter, setPriorityFilter] = useState<TaskPriority | "all">("all");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
@@ -51,9 +54,19 @@ export function App() {
   const [testStatus, setTestStatus] = useState<number | null>(null);
   const [testBody, setTestBody] = useState<unknown>(null);
   const [calendarDate, setCalendarDate] = useState(new Date());
+  const [calendarMode, setCalendarMode] = useState<CalendarMode>(
+    (window.localStorage.getItem("lastCalendarView") as CalendarMode) || "month"
+  );
+  const [statusFilter, setStatusFilter] = useState<Status | "all">("all");
+  const [showGuide, setShowGuide] = useState(false);
+  const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
 
   const { syncing, pendingOps, conflictsResolved, isOnline, lastServerTime, syncNow } =
     useSyncEngine(actions.replaceTasks);
+
+  useEffect(() => {
+    window.localStorage.setItem("lastCalendarView", calendarMode);
+  }, [calendarMode]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -70,21 +83,16 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!statusMessage) {
-      return;
-    }
-    const timeout = window.setTimeout(() => setStatusMessage(""), 3000);
+    if (!statusMessage) return;
+    const timeout = window.setTimeout(() => setStatusMessage(""), 3500);
     return () => window.clearTimeout(timeout);
   }, [statusMessage]);
 
   useEffect(() => {
-    const loadSettings = async () => {
+    void (async () => {
       const settings = await getSyncSettings();
-      if (settings.webAppUrl) {
-        setWebAppUrl(settings.webAppUrl);
-      }
-    };
-    void loadSettings();
+      if (settings.webAppUrl) setWebAppUrl(settings.webAppUrl);
+    })();
   }, []);
 
   useEffect(() => {
@@ -93,97 +101,95 @@ export function App() {
     }
   }, [conflictsResolved]);
 
-  const visibleTasks = useMemo(
-    () => state.tasks.filter((task) => !task.deletedAt),
-    [state.tasks]
-  );
+  const visibleTasks = useMemo(() => state.tasks.filter((task) => !task.deletedAt), [state.tasks]);
 
-  const filteredTasks = useMemo(() => {
-    return visibleTasks.filter((task) => {
-      if (streamFilter !== "all" && task.stream !== streamFilter) {
-        return false;
-      }
-      if (priorityFilter !== "all" && task.priority !== priorityFilter) {
-        return false;
-      }
-      return true;
-    });
-  }, [visibleTasks, streamFilter, priorityFilter]);
+  const tasksWithRisk = useMemo(() => visibleTasks.map((task) => enrichTaskRisk(task)), [visibleTasks]);
 
-  const inboxTasks = visibleTasks.filter((task) => task.status === "inbox");
-  const todayCount = visibleTasks.filter((task) => task.status === "today").length;
+  const boardTasks = useMemo(() => {
+    return tasksWithRisk
+      .filter((task) => (statusFilter === "all" ? task.status !== "archived" : task.status === statusFilter))
+      .filter((task) => task.status !== "done")
+      .sort((a, b) => (b.riskScore ?? 0) - (a.riskScore ?? 0));
+  }, [statusFilter, tasksWithRisk]);
 
-  const focusTask = visibleTasks.find((task) => task.id === state.activeTaskId);
+  const inboxTasks = useMemo(() => {
+    return tasksWithRisk.filter(
+      (task) =>
+        task.status === "backlog" &&
+        (!task.dueDate || task.priorityLane === "P4")
+    );
+  }, [tasksWithRisk]);
 
-  const todaySessions = state.focusSessions.filter((session) =>
-    isSameDay(session.startedAt)
-  );
+  const focusTask = tasksWithRisk.find((task) => task.id === state.activeTaskId);
+  const detailTask = tasksWithRisk.find((task) => task.id === detailTaskId);
+
+  const todaySessions = state.focusSessions.filter((session) => isSameDay(session.startedAt));
   const focusMinutes = todaySessions.reduce((sum, session) => sum + session.minutes, 0);
 
-  const todayCompleted = visibleTasks.filter(
+  const todayCompleted = tasksWithRisk.filter(
     (task) => task.status === "done" && task.doneAt && isSameDay(task.doneAt)
   );
-  const todayPending = visibleTasks.filter(
-    (task) =>
-      task.status !== "done" &&
-      task.status !== "blocked" &&
-      task.createdAt &&
-      isSameDay(task.createdAt)
-  );
-  const todayBlocked = visibleTasks.filter(
-    (task) => task.status === "blocked" && task.createdAt && isSameDay(task.createdAt)
-  );
+  const todayPending = tasksWithRisk.filter((task) => task.status === "in_progress");
+  const todayBlocked = tasksWithRisk.filter((task) => task.status === "blocked");
 
   const addTask = (rawValue: string) => {
     const parsed = parseQuickInput(rawValue);
-    if (!parsed.title) {
-      return;
-    }
-    const task = buildEmptyTask({
-      title: parsed.title,
-      priority: parsed.priority ?? "med",
-      stream: parsed.stream ?? "otro",
-      estimateMin: parsed.estimateMin,
-      tags: parsed.tags
-    });
-    actions.addTask(task);
+    if (!parsed.title) return;
+    actions.addTask(
+      buildEmptyTask({
+        title: parsed.title,
+        priority: parsed.priority ?? "med",
+        stream: parsed.stream ?? "otro",
+        estimateMin: parsed.estimateMin,
+        effort: parsed.estimateMin,
+        tags: parsed.tags,
+        status: "backlog",
+        priorityLane: "P4"
+      })
+    );
   };
 
-  const moveTask = (task: Task, status: TaskStatus) => {
-    actions.setStatus(task.id, status);
+  const handleDrop = (lane: PriorityLane, taskId: string) => {
+    actions.setLane(taskId, lane);
   };
 
-  const handleDrop = (status: TaskStatus, taskId: string) => {
-    actions.setStatus(taskId, status);
+  const handleBlock = (task: Task) => {
+    const reason = window.prompt("Motivo de bloqueo")?.trim();
+    if (!reason) return;
+    actions.setStatus(task.id, "blocked", reason);
   };
 
-  const handleSelectFocus = (task: Task) => {
-    dispatch({ type: "set-active", payload: task.id });
-    setView("focus");
+  const handleSuggestFocus = () => {
+    const candidate = [...tasksWithRisk]
+      .filter((task) => !["done", "archived"].includes(task.status))
+      .sort((a, b) => {
+        const laneWeight = ["P0", "P1"].includes(a.priorityLane)
+          ? -1
+          : ["P0", "P1"].includes(b.priorityLane)
+            ? 1
+            : 0;
+        if (laneWeight !== 0) return laneWeight;
+        return (b.riskScore ?? 0) - (a.riskScore ?? 0);
+      })[0];
+    if (!candidate) return;
+    dispatch({ type: "set-active", payload: candidate.id });
+    setStatusMessage(`Foco sugerido: ${candidate.title}`);
   };
 
-  const handleAddSession = (minutes: number) => {
-    if (!focusTask) {
-      return;
-    }
-    actions.addSession({
-      id: crypto.randomUUID(),
-      taskId: focusTask.id,
-      minutes,
-      startedAt: new Date().toISOString()
-    });
-  };
-
-  const handleBlocked = (note: string) => {
-    if (!focusTask) {
-      return;
-    }
+  const handlePlanTask = (date: Date, taskId: string) => {
+    const task = tasksWithRisk.find((item) => item.id === taskId);
+    if (!task) return;
+    const dueDate = date.toISOString();
     actions.updateTask({
-      ...focusTask,
-      status: "blocked",
-      blockedNote: note
+      ...task,
+      dueDate,
+      priorityLane: laneFromDate(dueDate)
     });
   };
+
+  const paletteResults = tasksWithRisk.filter((task) =>
+    task.title.toLowerCase().includes(paletteQuery.toLowerCase())
+  );
 
   const handleExport = async () => {
     const payload = JSON.stringify(await buildExportPayload());
@@ -194,7 +200,7 @@ export function App() {
     link.download = `personal-console-${new Date().toISOString()}.json`;
     link.click();
     URL.revokeObjectURL(url);
-    setStatusMessage("Exportación lista. Revisa tus descargas.");
+    setStatusMessage("Exportación lista.");
   };
 
   const handleImport = async (file: File) => {
@@ -202,7 +208,7 @@ export function App() {
     try {
       const parsed = JSON.parse(text) as { tasks?: Task[]; focusSessions?: unknown[] };
       if (!parsed.tasks || !Array.isArray(parsed.tasks)) {
-        setStatusMessage("El archivo no tiene tareas válidas.");
+        setStatusMessage("Archivo inválido.");
         return;
       }
       await importSyncPayload(
@@ -215,16 +221,11 @@ export function App() {
         actions.replaceTasks,
         actions.replaceFocusSessions
       );
-      setStatusMessage("Importación completada. Ops generadas para sincronizar.");
-    } catch (error) {
-      console.error("Import failed", error);
+      setStatusMessage("Importación completada.");
+    } catch {
       setStatusMessage("No se pudo importar el archivo.");
     }
   };
-
-  const paletteResults = visibleTasks.filter((task) =>
-    task.title.toLowerCase().includes(paletteQuery.toLowerCase())
-  );
 
   const handleSaveUrl = async () => {
     await setSyncSettings({ webAppUrl });
@@ -233,7 +234,7 @@ export function App() {
 
   const handleTestConnection = async () => {
     if (!webAppUrl) {
-      setConnectionStatus("Ingresa la URL del Web App.");
+      setConnectionStatus("Para sincronizar, pegá la URL del Web App.");
       return;
     }
     setConnectionStatus("Probando conexión...");
@@ -244,15 +245,14 @@ export function App() {
       setMetaStatus(result.status);
       setMetaBody(result.body);
       setConnectionStatus(result.ok ? "Conexión OK." : "Conexión falló.");
-    } catch (error) {
-      console.error("Connection test failed", error);
+    } catch {
       setConnectionStatus("No se pudo conectar.");
     }
   };
 
   const handleSendTestTask = async () => {
     if (!webAppUrl) {
-      setConnectionStatus("Ingresa la URL del Web App.");
+      setConnectionStatus("Para sincronizar, pegá la URL del Web App.");
       return;
     }
     const now = new Date();
@@ -273,10 +273,9 @@ export function App() {
       });
       setTestStatus(result.status);
       setTestBody(result.body);
-      setStatusMessage("TEST task enviada. Revisa Google Sheets.");
-    } catch (error) {
-      console.error("Test task failed", error);
-      setStatusMessage("No se pudo enviar la TEST task.");
+      setStatusMessage("Tarea de prueba enviada.");
+    } catch {
+      setStatusMessage("No se pudo enviar la tarea de prueba.");
     }
   };
 
@@ -284,46 +283,23 @@ export function App() {
     try {
       await syncNow();
       setStatusMessage("Sincronización completada.");
-    } catch (error) {
-      console.error("Sync failed", error);
+    } catch {
       setStatusMessage("No se pudo sincronizar.");
     }
   };
-
-  const handlePlanTask = (date: Date, taskId: string) => {
-    const task = visibleTasks.find((item) => item.id === taskId);
-    if (!task) {
-      return;
-    }
-    const plannedAt = date.toISOString();
-    const now = new Date();
-    const weekStart = startOfWeek(now);
-    const weekEnd = endOfWeek(now);
-    const status = isSameDay(plannedAt)
-      ? "today"
-      : date >= weekStart && date <= weekEnd
-        ? "week"
-        : "someday";
-    actions.updateTask({ ...task, plannedAt, status });
-  };
-
-  const metaJson = typeof metaBody === "object" && metaBody !== null ? (metaBody as any) : null;
-  const metaUrl = metaJson && metaJson.spreadsheetUrl ? String(metaJson.spreadsheetUrl) : "";
 
   return (
     <div className="app">
       <header className="app-header">
         <div>
           <h1>Personal Console</h1>
-          <p>Bandeja · Hoy · Semana · Algún día · Enfoque · Revisión</p>
+          <p>Tu Trello personal que piensa en tiempo, foco y riesgo.</p>
         </div>
         <div className="app-header__actions">
-          <button
-            type="button"
-            onClick={() => setPaletteOpen(true)}
-            aria-haspopup="dialog"
-            aria-expanded={paletteOpen}
-          >
+          <button type="button" onClick={() => setShowGuide(true)}>
+            ? Cómo usar
+          </button>
+          <button type="button" onClick={() => setPaletteOpen(true)}>
             Buscar (Ctrl+K)
           </button>
           <button type="button" onClick={() => void handleExport()}>
@@ -336,36 +312,27 @@ export function App() {
               accept="application/json"
               onChange={(event) => {
                 const file = event.target.files?.[0];
-                if (file) {
-                  void handleImport(file);
-                }
+                if (file) void handleImport(file);
               }}
             />
           </label>
         </div>
         <div className="app-header__status">
-          <span className={isOnline ? "online" : "offline"}>
-            {isOnline ? "Online" : "Offline"}
-          </span>
-          <span>{pendingOps} ops pendientes</span>
-          {syncing ? <span>Syncing...</span> : null}
+          <span className={isOnline ? "online" : "offline"}>Estado: {isOnline ? "Online" : "Offline"}</span>
+          <span>Ops pendientes: {pendingOps}</span>
+          {syncing ? <span>Sincronizando…</span> : null}
         </div>
-        {statusMessage ? (
-          <div className="status-banner" role="status" aria-live="polite">
-            {statusMessage}
-          </div>
-        ) : null}
+        {statusMessage ? <div className="status-banner">{statusMessage}</div> : null}
       </header>
 
       <nav className="app-nav">
         {(
           [
-            { id: "inbox", label: "Bandeja" },
+            { id: "inbox", label: "Entrada" },
             { id: "board", label: "Tablero" },
             { id: "focus", label: "Enfoque" },
             { id: "review", label: "Revisión" },
-            { id: "calendar-month", label: "Calendario Mes" },
-            { id: "calendar-week", label: "Calendario Semana" },
+            { id: "calendar", label: "Calendario" },
             { id: "settings", label: "Settings" }
           ] as { id: View; label: string }[]
         ).map((item) => (
@@ -382,10 +349,25 @@ export function App() {
 
       {view === "inbox" ? (
         <section className="view">
+          <HelpHint
+            title="Entrada / Captura"
+            lines={[
+              "Acá caen tareas nuevas.",
+              "Tu trabajo es asignarles fecha o carril.",
+              "Si no tienen fecha, van a P4."
+            ]}
+          />
           <TaskInput onAdd={addTask} />
           <div className="inbox-list">
             {inboxTasks.map((task) => (
-              <TaskCard key={task.id} task={task} onMove={(status) => moveTask(task, status)} />
+              <TaskCard
+                key={task.id}
+                task={task}
+                onSetLane={(lane) => actions.setLane(task.id, lane)}
+                onSetStatus={(status) => actions.setStatus(task.id, status)}
+                onBlock={() => handleBlock(task)}
+                onSelect={() => setDetailTaskId(task.id)}
+              />
             ))}
           </div>
         </section>
@@ -393,29 +375,34 @@ export function App() {
 
       {view === "board" ? (
         <section className="view">
+          <HelpHint
+            title="Tablero por carriles"
+            lines={[
+              "Las columnas son prioridad temporal (P0..P4).",
+              "El estado vive dentro de cada tarjeta.",
+              "Las tareas se ordenan por riesgo dentro de cada carril."
+            ]}
+          />
           <div className="board-header">
-            <Filters
-              stream={streamFilter}
-              priority={priorityFilter}
-              onStreamChange={setStreamFilter}
-              onPriorityChange={setPriorityFilter}
-            />
-            <p className="board-hint">Arrastra tarjetas entre columnas o usa los botones de movimiento.</p>
-            {todayCount > 5 ? (
-              <p className="warning">Hoy tiene más de 5 tareas. Reduce el foco.</p>
-            ) : null}
+            <label>
+              Filtrar por estado
+              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as Status | "all")}> 
+                <option value="all">Todos (excepto hechas)</option>
+                {statusOptions.map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
           <div className="board">
-            {statuses.map(({ status, label }) => (
-              <BoardColumn
-                key={status}
-                status={status}
-                title={label}
-                onDropTask={handleDrop}
-              >
-                {filteredTasks
-                  .filter((task) => task.status === status)
-                  .map((task) => (
+            {lanes.map(({ lane, label, limit }) => {
+              const laneTasks = boardTasks.filter((task) => task.priorityLane === lane);
+              const countLabel = limit > 0 ? `${laneTasks.length}/${limit}` : `${laneTasks.length}/∞`;
+              return (
+                <BoardColumn key={lane} lane={lane} title={label} countLabel={countLabel} onDropTask={handleDrop}>
+                  {laneTasks.map((task) => (
                     <div
                       key={task.id}
                       draggable
@@ -425,128 +412,117 @@ export function App() {
                     >
                       <TaskCard
                         task={task}
-                        onMove={(newStatus) => moveTask(task, newStatus)}
-                        onSelect={() => handleSelectFocus(task)}
+                        onSetStatus={(status) => actions.setStatus(task.id, status)}
+                        onSetLane={(nextLane) => actions.setLane(task.id, nextLane)}
+                        onBlock={() => handleBlock(task)}
+                        onSelect={() => {
+                          dispatch({ type: "set-active", payload: task.id });
+                          setDetailTaskId(task.id);
+                        }}
                       />
                     </div>
                   ))}
-              </BoardColumn>
-            ))}
+                </BoardColumn>
+              );
+            })}
           </div>
         </section>
       ) : null}
 
       {view === "focus" ? (
         <section className="view">
+          <HelpHint
+            title="Enfoque"
+            lines={[
+              "Elegí una sola tarea para hoy.",
+              "Priorizá P0/P1 con mayor riesgo.",
+              "Marcá bloqueos con motivo para no perder contexto."
+            ]}
+          />
           <FocusTimer
             task={focusTask}
             sessions={todaySessions.filter((session) => session.taskId === focusTask?.id)}
-            onAddSession={handleAddSession}
-            onBlocked={handleBlocked}
+            onAddSession={(minutes) => {
+              if (!focusTask) return;
+              actions.addSession({
+                id: crypto.randomUUID(),
+                taskId: focusTask.id,
+                minutes,
+                startedAt: new Date().toISOString()
+              });
+            }}
+            onSuggest={handleSuggestFocus}
+            onSetStatus={(status) => {
+              if (!focusTask) return;
+              actions.setStatus(focusTask.id, status);
+            }}
+            onSetLane={(lane) => {
+              if (!focusTask) return;
+              actions.setLane(focusTask.id, lane);
+            }}
+            onSetDueDate={(date) => {
+              if (!focusTask) return;
+              const riskPreview = computeRisk({ ...focusTask, dueDate: date ? new Date(date).toISOString() : undefined });
+              actions.updateTask({
+                ...focusTask,
+                dueDate: date ? new Date(date).toISOString() : undefined,
+                priorityLane: date ? laneFromDate(new Date(date).toISOString()) : "P4",
+                riskBand: riskPreview.band,
+                riskScore: riskPreview.score,
+                riskReasons: riskPreview.reasons
+              });
+            }}
+            onBlock={(note) => {
+              if (!focusTask) return;
+              actions.setStatus(focusTask.id, "blocked", note);
+            }}
           />
         </section>
       ) : null}
 
       {view === "review" ? (
         <section className="view">
+          <HelpHint
+            title="Revisión diaria"
+            lines={[
+              "Chequeá cuántas tareas cerraste hoy.",
+              "Detectá bloqueos y pendientes críticos.",
+              "Replanificá antes de cerrar el día."
+            ]}
+          />
           <ReviewSummary
             completed={todayCompleted}
             pending={todayPending}
             blocked={todayBlocked}
             focusMinutes={focusMinutes}
             onMovePendingToToday={() => {
-              todayPending.forEach((task) => moveTask(task, "today"));
+              todayPending.forEach((task) => actions.setLane(task.id, "P0"));
             }}
             onClearTrash={() => {
-              visibleTasks
-                .filter((task) => task.status === "inbox" && task.title.length < 3)
+              tasksWithRisk
+                .filter((task) => task.status === "backlog" && task.title.length < 3)
                 .forEach((task) => actions.deleteTask(task.id));
             }}
           />
         </section>
       ) : null}
 
-      {view === "calendar-month" ? (
+      {view === "calendar" ? (
         <section className="view">
-          <div className="calendar-header">
-            <h2>
-              {calendarDate.toLocaleDateString("es-ES", { month: "long", year: "numeric" })}
-            </h2>
-            <div className="calendar-header__actions">
-              <button
-                type="button"
-                onClick={() =>
-                  setCalendarDate(
-                    new Date(calendarDate.getFullYear(), calendarDate.getMonth() - 1, 1)
-                  )
-                }
-              >
-                Mes anterior
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setCalendarDate(
-                    new Date(calendarDate.getFullYear(), calendarDate.getMonth() + 1, 1)
-                  )
-                }
-              >
-                Mes siguiente
-              </button>
-            </div>
-          </div>
-          <CalendarMonth
-            currentDate={calendarDate}
-            tasks={visibleTasks}
-            onDropTask={handlePlanTask}
+          <HelpHint
+            title="Calendario"
+            lines={[
+              "Una sola pestaña con vista Mes/Semana.",
+              "Mostramos tareas con fecha de vencimiento.",
+              "Arrastrá tareas para cambiar su fecha."
+            ]}
           />
-        </section>
-      ) : null}
-
-      {view === "calendar-week" ? (
-        <section className="view">
-          <div className="calendar-header">
-            <h2>
-              Semana del{" "}
-              {startOfWeek(calendarDate).toLocaleDateString("es-ES", {
-                day: "numeric",
-                month: "short"
-              })}
-            </h2>
-            <div className="calendar-header__actions">
-              <button
-                type="button"
-                onClick={() =>
-                  setCalendarDate(
-                    new Date(
-                      calendarDate.getFullYear(),
-                      calendarDate.getMonth(),
-                      calendarDate.getDate() - 7
-                    )
-                  )
-                }
-              >
-                Semana anterior
-              </button>
-              <button
-                type="button"
-                onClick={() =>
-                  setCalendarDate(
-                    new Date(
-                      calendarDate.getFullYear(),
-                      calendarDate.getMonth(),
-                      calendarDate.getDate() + 7
-                    )
-                  )
-                }
-              >
-                Semana siguiente
-              </button>
-            </div>
-          </div>
-          <CalendarWeek
+          <CalendarView
             currentDate={calendarDate}
-            tasks={visibleTasks}
+            tasks={tasksWithRisk.filter((task) => Boolean(task.dueDate))}
+            mode={calendarMode}
+            onModeChange={setCalendarMode}
+            onChangeDate={setCalendarDate}
             onDropTask={handlePlanTask}
           />
         </section>
@@ -556,12 +532,21 @@ export function App() {
         <section className="view">
           <div className="settings">
             <h2>Sincronización</h2>
+            <HelpHint
+              title="¿Qué es esto?"
+              lines={[
+                "La URL del Web App conecta con tu Google Sheets para sincronizar entre dispositivos.",
+                "Sin URL, la app funciona offline/local (este navegador).",
+                "Probar conexión verifica que el endpoint responda.",
+                "Sincronizar ahora fuerza enviar/traer cambios."
+              ]}
+            />
             <div className="settings__status-grid">
               <div>
                 <strong>Estado:</strong> {isOnline ? "Online" : "Offline"}
               </div>
               <div>
-                <strong>Último sync:</strong> {lastServerTime ?? "--"}
+                <strong>Último sync:</strong> {lastServerTime ?? "Nunca"}
               </div>
               <div>
                 <strong>Ops pendientes:</strong> {pendingOps}
@@ -576,48 +561,31 @@ export function App() {
                 onChange={(event) => setWebAppUrl(event.target.value)}
               />
             </label>
+            {!webAppUrl ? <p className="warning">Para sincronizar, pegá la URL del Web App.</p> : null}
             <div className="settings__actions">
               <button type="button" onClick={handleSaveUrl}>
                 Guardar URL
               </button>
-              <button type="button" onClick={handleTestConnection}>
-                Test connection
+              <button type="button" onClick={handleTestConnection} disabled={!webAppUrl}>
+                Probar conexión
               </button>
-              <button type="button" onClick={handleSendTestTask}>
-                Send TEST task
+              <button type="button" onClick={handleSendTestTask} disabled={!webAppUrl}>
+                Enviar tarea de prueba
               </button>
-              <button type="button" onClick={handleSyncNow} disabled={!isOnline || syncing}>
-                Sync now
+              <button type="button" onClick={handleSyncNow} disabled={!isOnline || syncing || !webAppUrl}>
+                Sincronizar ahora
               </button>
             </div>
             {connectionStatus ? <p className="settings__status">{connectionStatus}</p> : null}
             <div className="settings__results">
               <div>
                 <h3>Meta response</h3>
-                <p>
-                  <strong>URL:</strong> {webAppUrl ? `${webAppUrl}?route=meta` : "--"}
-                </p>
-                <p>
-                  <strong>Status:</strong> {metaStatus ?? "--"}
-                </p>
-                {metaUrl ? (
-                  <p>
-                    <strong>Spreadsheet:</strong>{" "}
-                    <a href={metaUrl} target="_blank" rel="noreferrer">
-                      Abrir Spreadsheet
-                    </a>
-                  </p>
-                ) : null}
+                <p><strong>Status:</strong> {metaStatus ?? "--"}</p>
                 <pre>{metaBody ? JSON.stringify(metaBody, null, 2) : "--"}</pre>
               </div>
               <div>
                 <h3>TEST task response</h3>
-                <p>
-                  <strong>URL:</strong> {webAppUrl ? `${webAppUrl}?route=upsert` : "--"}
-                </p>
-                <p>
-                  <strong>Status:</strong> {testStatus ?? "--"}
-                </p>
+                <p><strong>Status:</strong> {testStatus ?? "--"}</p>
                 <pre>{testBody ? JSON.stringify(testBody, null, 2) : "--"}</pre>
               </div>
             </div>
@@ -625,20 +593,59 @@ export function App() {
         </section>
       ) : null}
 
-      {paletteOpen ? (
-        <div className="palette" onClick={() => setPaletteOpen(false)}>
-          <div
-            className="palette__panel"
-            role="dialog"
-            aria-modal="true"
-            aria-label="Buscar tareas"
-            onClick={(event) => event.stopPropagation()}
-          >
+      {detailTask ? (
+        <div className="palette" onClick={() => setDetailTaskId(null)}>
+          <div className="palette__panel" onClick={(event) => event.stopPropagation()}>
             <div className="palette__header">
-              <p>Buscar tareas</p>
-              <button type="button" onClick={() => setPaletteOpen(false)}>
+              <p>Detalle de tarea</p>
+              <button type="button" onClick={() => setDetailTaskId(null)}>
                 Cerrar
               </button>
+            </div>
+            <label>
+              Título
+              <input
+                value={detailTask.title}
+                onChange={(event) => actions.updateTask({ ...detailTask, title: event.target.value })}
+              />
+            </label>
+            <label>
+              Descripción
+              <textarea
+                value={detailTask.description ?? ""}
+                onChange={(event) => actions.updateTask({ ...detailTask, description: event.target.value })}
+              />
+            </label>
+            <div className="task-card__actions">
+              <button type="button" onClick={() => actions.setStatus(detailTask.id, "archived")}>Archivar</button>
+              <button type="button" onClick={() => actions.deleteTask(detailTask.id)}>Borrar</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {showGuide ? (
+        <div className="palette" onClick={() => setShowGuide(false)}>
+          <div className="palette__panel" onClick={(event) => event.stopPropagation()}>
+            <div className="palette__header">
+              <p>Cómo usar la app</p>
+              <button type="button" onClick={() => setShowGuide(false)}>Cerrar</button>
+            </div>
+            <ol>
+              <li>Capturá tareas en Entrada y asignales fecha/carril.</li>
+              <li>Trabajá en Tablero P0..P4; estado y riesgo están en cada tarjeta.</li>
+              <li>Usá Enfoque para elegir 1 tarea y ejecutar sin distracciones.</li>
+            </ol>
+          </div>
+        </div>
+      ) : null}
+
+      {paletteOpen ? (
+        <div className="palette" onClick={() => setPaletteOpen(false)}>
+          <div className="palette__panel" onClick={(event) => event.stopPropagation()}>
+            <div className="palette__header">
+              <p>Buscar tareas</p>
+              <button type="button" onClick={() => setPaletteOpen(false)}>Cerrar</button>
             </div>
             <input
               autoFocus
@@ -654,17 +661,18 @@ export function App() {
                   <div key={task.id} className="palette__item">
                     <div>
                       <strong>{task.title}</strong>
-                      <span>{statusLabels[task.status]}</span>
+                      <span>{task.priorityLane}</span>
                     </div>
                     <div className="palette__actions">
-                      <button type="button" onClick={() => moveTask(task, "today")}>
-                        Hoy
-                      </button>
-                      <button type="button" onClick={() => moveTask(task, "week")}>
-                        Semana
-                      </button>
-                      <button type="button" onClick={() => moveTask(task, "done")}>
-                        Hecho
+                      <button
+                        type="button"
+                        onClick={() => {
+                          dispatch({ type: "set-active", payload: task.id });
+                          setView("focus");
+                          setPaletteOpen(false);
+                        }}
+                      >
+                        Ir a enfoque
                       </button>
                     </div>
                   </div>

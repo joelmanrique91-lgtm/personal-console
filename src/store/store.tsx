@@ -1,9 +1,9 @@
 import React, { createContext, useContext, useEffect, useMemo, useReducer } from "react";
 import { runMigrations } from "./migrations";
-import { AppState, FocusSession, Task, TaskStatus } from "./types";
-import { endOfWeek, startOfDay, startOfWeek } from "../utils/date";
+import { AppState, FocusSession, PriorityLane, Status, Task } from "./types";
 import { enqueueDelete, enqueueUpsert } from "../sync/queue";
 import { getFocusSessions, getTasksCache, setFocusSessions, setTasksCache } from "../sync/storage";
+import { enrichTaskRisk } from "../utils/risk";
 
 const initialState: AppState = {
   tasks: [],
@@ -15,8 +15,6 @@ type Action =
   | { type: "load"; payload: AppState }
   | { type: "add-task"; payload: Task }
   | { type: "update-task"; payload: Task }
-  | { type: "delete-task"; payload: string }
-  | { type: "set-status"; payload: { id: string; status: TaskStatus } }
   | { type: "replace-tasks"; payload: Task[] }
   | { type: "replace-focus"; payload: FocusSession[] }
   | { type: "set-active"; payload?: string }
@@ -34,29 +32,6 @@ function reducer(state: AppState, action: Action): AppState {
         ...state,
         tasks: state.tasks.map((task) =>
           task.id === action.payload.id ? action.payload : task
-        )
-      };
-    case "delete-task":
-      return {
-        ...state,
-        tasks: state.tasks.map((task) =>
-          task.id === action.payload
-            ? { ...task, deletedAt: new Date().toISOString() }
-            : task
-        )
-      };
-    case "set-status":
-      return {
-        ...state,
-        tasks: state.tasks.map((task) =>
-          task.id === action.payload.id
-            ? {
-                ...task,
-                status: action.payload.status,
-                doneAt:
-                  action.payload.status === "done" ? new Date().toISOString() : task.doneAt
-              }
-            : task
         )
       };
     case "replace-tasks":
@@ -95,7 +70,8 @@ interface StoreContextValue {
   actions: {
     addTask: (task: Task) => void;
     updateTask: (task: Task) => void;
-    setStatus: (taskId: string, status: TaskStatus) => void;
+    setStatus: (taskId: string, status: Status, blockedReason?: string) => void;
+    setLane: (taskId: string, lane: PriorityLane) => void;
     deleteTask: (taskId: string) => void;
     addSession: (session: FocusSession) => void;
     bulkImport: (state: AppState) => void;
@@ -115,22 +91,23 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       const migrated = await runMigrations();
       const tasks = migrated?.tasks ?? (await getTasksCache());
       const focusSessions = migrated?.focusSessions ?? (await getFocusSessions());
+      const normalizedTasks = tasks.map((task) => enrichTaskRisk(task));
       if (!cancelled) {
         dispatch({
           type: "load",
           payload: {
-            tasks,
+            tasks: normalizedTasks,
             focusSessions,
             activeTaskId: migrated?.activeTaskId
           }
         });
       }
       if (migrated) {
-        await setTasksCache(tasks);
+        await setTasksCache(normalizedTasks);
         await setFocusSessions(focusSessions);
       }
     };
-    load();
+    void load();
     return () => {
       cancelled = true;
     };
@@ -146,47 +123,63 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
 
   const actions = useMemo<StoreContextValue["actions"]>(() => {
     const addTask = (task: Task) => {
-      dispatch({ type: "add-task", payload: task });
-      void enqueueUpsert(task);
+      const next = enrichTaskRisk(task);
+      dispatch({ type: "add-task", payload: next });
+      void enqueueUpsert(next);
     };
+
     const updateTask = (task: Task) => {
       const existing = state.tasks.find((item) => item.id === task.id);
       const now = new Date().toISOString();
-      const nextTask: Task = {
+      const nextTask: Task = enrichTaskRisk({
         ...task,
         tags: task.tags ?? [],
+        dueDate: task.dueDate,
         updatedAt: now,
+        lastTouchedAt: now,
         revision: existing ? existing.revision + 1 : task.revision
-      };
+      });
       dispatch({ type: "update-task", payload: nextTask });
       void enqueueUpsert(nextTask);
     };
-    const setStatus = (taskId: string, status: TaskStatus) => {
+
+    const setStatus = (taskId: string, status: Status, blockedReason?: string) => {
       const task = state.tasks.find((item) => item.id === taskId);
       if (!task) {
         return;
       }
       const now = new Date().toISOString();
-      const plannedAt =
-        status === "today"
-          ? startOfDay().toISOString()
-          : status === "week"
-            ? startOfWeek().toISOString()
-            : status === "someday"
-              ? undefined
-              : task.plannedAt;
-      const nextTask: Task = {
+      const nextTask: Task = enrichTaskRisk({
         ...task,
         status,
-        plannedAt,
-        dueAt: status === "week" ? endOfWeek().toISOString() : task.dueAt,
         doneAt: status === "done" ? now : task.doneAt,
+        blockedReason: status === "blocked" ? blockedReason ?? task.blockedReason : undefined,
+        blockedSince: status === "blocked" ? task.blockedSince ?? now : undefined,
         updatedAt: now,
+        lastTouchedAt: now,
         revision: task.revision + 1
-      };
+      });
       dispatch({ type: "update-task", payload: nextTask });
       void enqueueUpsert(nextTask);
     };
+
+    const setLane = (taskId: string, lane: PriorityLane) => {
+      const task = state.tasks.find((item) => item.id === taskId);
+      if (!task) {
+        return;
+      }
+      const now = new Date().toISOString();
+      const nextTask: Task = enrichTaskRisk({
+        ...task,
+        priorityLane: lane,
+        updatedAt: now,
+        lastTouchedAt: now,
+        revision: task.revision + 1
+      });
+      dispatch({ type: "update-task", payload: nextTask });
+      void enqueueUpsert(nextTask);
+    };
+
     const deleteTask = (taskId: string) => {
       const task = state.tasks.find((item) => item.id === taskId);
       if (!task) {
@@ -197,11 +190,13 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
         ...task,
         deletedAt: now,
         updatedAt: now,
+        lastTouchedAt: now,
         revision: task.revision + 1
       };
       dispatch({ type: "update-task", payload: nextTask });
       void enqueueDelete(nextTask);
     };
+
     const addSession = (session: FocusSession) => {
       dispatch({ type: "add-session", payload: session });
     };
@@ -209,7 +204,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "bulk-import", payload });
     };
     const replaceTasks = (tasks: Task[]) => {
-      dispatch({ type: "replace-tasks", payload: tasks });
+      dispatch({ type: "replace-tasks", payload: tasks.map((task) => enrichTaskRisk(task)) });
     };
     const replaceFocusSessions = (sessions: FocusSession[]) => {
       dispatch({ type: "replace-focus", payload: sessions });
@@ -219,6 +214,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
       addTask,
       updateTask,
       setStatus,
+      setLane,
       deleteTask,
       addSession,
       bulkImport,
@@ -242,21 +238,31 @@ export function useStore() {
 
 export function buildEmptyTask(overrides: Partial<Task>): Task {
   const now = new Date().toISOString();
+  const dueDate = overrides.dueDate;
   return {
     id: crypto.randomUUID(),
     title: overrides.title ?? "",
-    status: overrides.status ?? "inbox",
+    description: overrides.description,
+    status: overrides.status ?? "backlog",
+    priorityLane: overrides.priorityLane ?? (dueDate ? "P1" : "P4"),
     priority: overrides.priority ?? "med",
     stream: overrides.stream ?? "otro",
     tags: overrides.tags ?? [],
     estimateMin: overrides.estimateMin,
+    effort: overrides.effort ?? overrides.estimateMin,
     plannedAt: overrides.plannedAt,
-    dueAt: overrides.dueAt,
+    dueDate,
     createdAt: now,
     updatedAt: overrides.updatedAt ?? now,
+    lastTouchedAt: overrides.lastTouchedAt ?? now,
     revision: overrides.revision ?? 1,
     deletedAt: overrides.deletedAt,
     doneAt: overrides.doneAt,
-    blockedNote: overrides.blockedNote
+    blockedReason: overrides.blockedReason,
+    blockedSince: overrides.blockedSince,
+    oldStatus: overrides.oldStatus,
+    riskScore: overrides.riskScore,
+    riskBand: overrides.riskBand,
+    riskReasons: overrides.riskReasons
   };
 }
