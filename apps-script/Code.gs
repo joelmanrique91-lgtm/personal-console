@@ -38,45 +38,65 @@ const SPREADSHEET_NAME = "Personal Console DB";
 const SCRIPT_PROPERTY_KEY = "SPREADSHEET_ID";
 
 function doGet(e) {
-  const route = getRoute_(e);
-  if (route === "meta") {
-    return jsonResponse_(meta_());
+  try {
+    const route = getRoute_(e);
+    if (route === "meta") {
+      return jsonResponse_(meta_());
+    }
+    if (route === "diag") {
+      return jsonResponse_(diag_());
+    }
+    return jsonResponse_({ ok: false, error: "Route not found", status: 404 });
+  } catch (error) {
+    return jsonResponse_({
+      ok: false,
+      error: String(error && error.message ? error.message : error),
+      status: 500
+    });
   }
-  if (route === "diag") {
-    return jsonResponse_(diag_());
-  }
-  return jsonResponse_({ ok: false, error: "Route not found" });
 }
 
 function doPost(e) {
-  const route = getRoute_(e);
-  if (route !== "sync")
-    return jsonResponse_({ ok: false, error: "Route not found" });
-
-  let body = {};
   try {
-    body = parseBody_(e);
+    const route = getRoute_(e);
+    if (route !== "sync")
+      return jsonResponse_({ ok: false, error: "Route not found", status: 404 });
+
+    let body = {};
+    try {
+      body = parseBody_(e);
+    } catch (error) {
+      return jsonResponse_({
+        ok: false,
+        error: String(error && error.message ? error.message : error),
+        status: 400
+      });
+    }
+    const workspaceKey = String(body.workspaceKey || "").trim();
+    const ops = Array.isArray(body.ops) ? body.ops : [];
+    Logger.log(
+      "sync_request route=%s workspaceKey=%s ops=%s",
+      route,
+      workspaceKey,
+      ops.length
+    );
+    const response = sync_(body);
+    Logger.log(
+      "sync_response route=%s workspaceKey=%s spreadsheetId=%s appliedOps=%s tasksPulled=%s",
+      route,
+      workspaceKey,
+      response.spreadsheetId || "",
+      (response.appliedOps || []).length,
+      (response.tasks || []).length
+    );
+    return jsonResponse_(response);
   } catch (error) {
-    return jsonResponse_({ ok: false, error: String(error.message || error) });
+    return jsonResponse_({
+      ok: false,
+      error: String(error && error.message ? error.message : error),
+      status: 500
+    });
   }
-  const workspaceKey = String(body.workspaceKey || "").trim();
-  const ops = Array.isArray(body.ops) ? body.ops : [];
-  Logger.log(
-    "sync_request route=%s workspaceKey=%s ops=%s",
-    route,
-    workspaceKey,
-    ops.length
-  );
-  const response = sync_(body);
-  Logger.log(
-    "sync_response route=%s workspaceKey=%s spreadsheetId=%s appliedOps=%s tasksPulled=%s",
-    route,
-    workspaceKey,
-    response.spreadsheetId || "",
-    (response.appliedOps || []).length,
-    (response.tasks || []).length
-  );
-  return jsonResponse_(response);
 }
 
 function parseBody_(e) {

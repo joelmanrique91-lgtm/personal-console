@@ -11,7 +11,7 @@ export const FOCUS_TASK_KEY = "focus.taskId";
 export const LANE_LIMITS_KEY = "board.laneLimits";
 
 export const DEFAULT_BACKEND_URL =
-  "/api";
+  "https://personal-console-sync-proxy.joel-personal-console.workers.dev/api";
 export const DEFAULT_WORKSPACE = "joel-main";
 
 export interface SyncState {
