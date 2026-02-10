@@ -61,13 +61,14 @@ export function FocusTimer({
   };
 
   return (
-    <div className="focus-card">
+    <div className="focus-card card">
+      {task ? <div className={`focus-card__risk-bar focus-card__risk-bar--${task.riskBand ?? "low"}`} /> : null}
       <h3>Foco del día</h3>
       <p className="board-hint">Elegí 1 tarea para hacer hoy. La app te muestra por qué es riesgosa.</p>
       {!task ? (
         <>
           <p>No hay tarea seleccionada.</p>
-          <button type="button" onClick={onSuggest}>
+          <button type="button" className="btn btn--primary" onClick={onSuggest}>
             Sugerir foco
           </button>
         </>
@@ -93,9 +94,10 @@ export function FocusTimer({
             Esfuerzo: {task.effort ? `${task.effort}m` : "-"} · Tags: {task.tags.length > 0 ? task.tags.join(", ") : "-"}
           </p>
           <div className="task-card__actions">
-            <button type="button" onClick={() => onSetStatus("in_progress")}>Marcar En curso</button>
+            <button type="button" className="btn btn--primary btn--sm" onClick={() => onSetStatus("in_progress")}>Empezar foco</button>
             <button
               type="button"
+              className="btn btn--ghost btn--sm"
               onClick={() => {
                 const note = window.prompt("Motivo del bloqueo", blockedNote) ?? "";
                 if (note.trim()) {
@@ -106,8 +108,8 @@ export function FocusTimer({
             >
               Bloquear
             </button>
-            <button type="button" onClick={() => onSetStatus("done")}>Hecha</button>
-            <button type="button" onClick={() => setPickerOpen((prev) => !prev)}>
+            <button type="button" className="btn btn--secondary btn--sm" onClick={() => onSetStatus("done")}>Hecha</button>
+            <button type="button" className="btn btn--ghost btn--sm" onClick={() => setPickerOpen((prev) => !prev)}>
               Cambiar foco
             </button>
             <select
@@ -139,6 +141,7 @@ export function FocusTimer({
                   <li key={candidate.id}>
                     <button
                       type="button"
+                      className="btn btn--ghost btn--sm"
                       onClick={() => {
                         onChangeFocus(candidate.id);
                         setPickerOpen(false);
@@ -154,10 +157,10 @@ export function FocusTimer({
           <div className="focus-card__timer">
             <span aria-live="polite">{formatMinutes(Math.round(elapsedSeconds / 60))}</span>
             <div>
-              <button type="button" onClick={() => setRunning(true)} disabled={running}>
+              <button type="button" className="btn btn--primary btn--sm" onClick={() => setRunning(true)} disabled={running}>
                 Iniciar
               </button>
-              <button type="button" onClick={handleStop} disabled={!running}>
+              <button type="button" className="btn btn--secondary btn--sm" onClick={handleStop} disabled={!running}>
                 Detener
               </button>
             </div>
