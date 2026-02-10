@@ -1,3 +1,5 @@
+import { WarningIcon } from "../ui/icons";
+
 interface HelpHintProps {
   title: string;
   lines: string[];
@@ -5,13 +7,13 @@ interface HelpHintProps {
 
 export function HelpHint({ title, lines }: HelpHintProps) {
   return (
-    <div className="help-hint" role="note" aria-label={title}>
-      <strong>{title}</strong>
+    <aside className="help-hint" role="note" aria-label={title}>
+      <div className="help-hint__title"><WarningIcon width={18} height={18} /> <strong>{title}</strong></div>
       <ul>
-        {lines.map((line) => (
+        {lines.slice(0, 3).map((line) => (
           <li key={line}>{line}</li>
         ))}
       </ul>
-    </div>
+    </aside>
   );
 }

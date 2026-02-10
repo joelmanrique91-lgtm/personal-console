@@ -1,4 +1,4 @@
-import { ReactNode } from "react";
+import { ReactNode, useState } from "react";
 import { PriorityLane } from "../store/types";
 
 interface BoardColumnProps {
@@ -11,24 +11,28 @@ interface BoardColumnProps {
 }
 
 export function BoardColumn({ title, lane, countLabel, limitState = "normal", onDropTask, children }: BoardColumnProps) {
+  const [isOver, setIsOver] = useState(false);
   return (
     <section
-      className={`board-column board-column--${limitState}`}
+      className={`board-column board-column--${limitState}${isOver ? " board-column--drag-over" : ""}`}
       role="region"
       aria-label={`Carril ${title}`}
-      onDragOver={(event) => event.preventDefault()}
+      onDragOver={(event) => {
+        event.preventDefault();
+        setIsOver(true);
+      }}
+      onDragLeave={() => setIsOver(false)}
       onDrop={(event) => {
         event.preventDefault();
+        setIsOver(false);
         const taskId = event.dataTransfer.getData("text/task");
-        if (taskId) {
-          onDropTask(lane, taskId);
-        }
+        if (taskId) onDropTask(lane, taskId);
       }}
     >
       <header className="board-column__header">
         <h3>{title}</h3>
         <div className="board-column__meta">
-          <span>{countLabel}</span>
+          <span className="badge">{countLabel}</span>
           {limitState === "at_limit" ? <small>Al límite</small> : null}
           {limitState === "over_limit" ? <small>Sobrecargado</small> : null}
         </div>
