@@ -52,7 +52,7 @@ export function FocusTimer({
 
   return (
     <div className="focus-card">
-      <h3>Foco de hoy</h3>
+      <h3>Foco del día</h3>
       <p className="board-hint">Elegí 1 tarea para hacer hoy. La app te muestra por qué es riesgosa.</p>
       {!task ? (
         <>

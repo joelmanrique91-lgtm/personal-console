@@ -33,10 +33,22 @@ export function CalendarView({
               })}`}
         </h2>
         <div className="calendar-header__actions">
-          <select value={mode} onChange={(event) => onModeChange(event.target.value as CalendarMode)}>
-            <option value="month">Mes</option>
-            <option value="week">Semana</option>
-          </select>
+          <div className="calendar-mode-toggle" role="tablist" aria-label="Vista de calendario">
+            <button
+              type="button"
+              className={mode === "month" ? "active" : ""}
+              onClick={() => onModeChange("month")}
+            >
+              Mes
+            </button>
+            <button
+              type="button"
+              className={mode === "week" ? "active" : ""}
+              onClick={() => onModeChange("week")}
+            >
+              Semana
+            </button>
+          </div>
           <button
             type="button"
             onClick={() =>

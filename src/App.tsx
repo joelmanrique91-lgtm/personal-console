@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { BoardColumn } from "./components/BoardColumn";
 import { CalendarMode, CalendarView } from "./components/CalendarView";
+import { Filters } from "./components/Filters";
 import { FocusTimer } from "./components/FocusTimer";
 import { HelpHint } from "./components/HelpHint";
 import { ReviewSummary } from "./components/ReviewSummary";
@@ -8,10 +9,17 @@ import { TaskCard } from "./components/TaskCard";
 import { TaskInput } from "./components/TaskInput";
 import { fetchMetaWithStatus, postOpsWithStatus } from "./services/api";
 import { buildEmptyTask, useStore } from "./store/store";
-import { PriorityLane, Status, Task } from "./store/types";
+import { PriorityLane, RiskBand, Status, Task, TaskPriority, TaskStream } from "./store/types";
 import { useSyncEngine } from "./sync/engine";
 import { buildExportPayload, importSyncPayload } from "./sync/importExport";
-import { getSyncSettings, setSyncSettings } from "./sync/storage";
+import {
+  getCalendarViewMode,
+  getFocusTaskId,
+  getSyncSettings,
+  setCalendarViewMode,
+  setFocusTaskId,
+  setSyncSettings
+} from "./sync/storage";
 import { isSameDay } from "./utils/date";
 import { parseQuickInput } from "./utils/quickParser";
 import { computeRisk, enrichTaskRisk } from "./utils/risk";
@@ -27,6 +35,13 @@ const lanes: Array<{ lane: PriorityLane; label: string; limit: number }> = [
 
 const statusOptions: Status[] = ["backlog", "in_progress", "blocked", "done", "archived"];
 
+const riskBandWeight: Record<RiskBand, number> = {
+  critical: 4,
+  high: 3,
+  medium: 2,
+  low: 1
+};
+
 type View = "inbox" | "board" | "focus" | "review" | "calendar" | "settings";
 
 function laneFromDate(dateIso?: string): PriorityLane {
@@ -39,6 +54,17 @@ function laneFromDate(dateIso?: string): PriorityLane {
   if (days <= 28) return "P2";
   if (days <= 60) return "P3";
   return "P4";
+}
+
+function compareBoardOrder(a: Task, b: Task): number {
+  const bandDiff = riskBandWeight[b.riskBand ?? "low"] - riskBandWeight[a.riskBand ?? "low"];
+  if (bandDiff !== 0) return bandDiff;
+  const scoreDiff = (b.riskScore ?? 0) - (a.riskScore ?? 0);
+  if (scoreDiff !== 0) return scoreDiff;
+  if (!a.dueDate && !b.dueDate) return 0;
+  if (!a.dueDate) return 1;
+  if (!b.dueDate) return -1;
+  return new Date(a.dueDate).getTime() - new Date(b.dueDate).getTime();
 }
 
 export function App() {
@@ -54,19 +80,39 @@ export function App() {
   const [testStatus, setTestStatus] = useState<number | null>(null);
   const [testBody, setTestBody] = useState<unknown>(null);
   const [calendarDate, setCalendarDate] = useState(new Date());
-  const [calendarMode, setCalendarMode] = useState<CalendarMode>(
-    (window.localStorage.getItem("lastCalendarView") as CalendarMode) || "month"
-  );
+  const [calendarMode, setCalendarMode] = useState<CalendarMode>("month");
   const [statusFilter, setStatusFilter] = useState<Status | "all">("all");
+  const [showDone, setShowDone] = useState(false);
   const [showGuide, setShowGuide] = useState(false);
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
+  const [streamFilter, setStreamFilter] = useState<TaskStream | "all">("all");
+  const [priorityFilter, setPriorityFilter] = useState<TaskPriority | "all">("all");
 
   const { syncing, pendingOps, conflictsResolved, isOnline, lastServerTime, syncNow } =
     useSyncEngine(actions.replaceTasks);
 
   useEffect(() => {
-    window.localStorage.setItem("lastCalendarView", calendarMode);
+    void (async () => {
+      const [storedMode, settings, focusTaskId] = await Promise.all([
+        getCalendarViewMode(),
+        getSyncSettings(),
+        getFocusTaskId()
+      ]);
+      if (storedMode) setCalendarMode(storedMode);
+      if (settings.webAppUrl) setWebAppUrl(settings.webAppUrl);
+      if (focusTaskId) dispatch({ type: "set-active", payload: focusTaskId });
+    })();
+  }, [dispatch]);
+
+  useEffect(() => {
+    void setCalendarViewMode(calendarMode);
   }, [calendarMode]);
+
+  useEffect(() => {
+    if (state.activeTaskId) {
+      void setFocusTaskId(state.activeTaskId);
+    }
+  }, [state.activeTaskId]);
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
@@ -89,13 +135,6 @@ export function App() {
   }, [statusMessage]);
 
   useEffect(() => {
-    void (async () => {
-      const settings = await getSyncSettings();
-      if (settings.webAppUrl) setWebAppUrl(settings.webAppUrl);
-    })();
-  }, []);
-
-  useEffect(() => {
     if (conflictsResolved > 0) {
       setStatusMessage(`Conflictos resueltos automáticamente: ${conflictsResolved}.`);
     }
@@ -108,16 +147,24 @@ export function App() {
   const boardTasks = useMemo(() => {
     return tasksWithRisk
       .filter((task) => (statusFilter === "all" ? task.status !== "archived" : task.status === statusFilter))
-      .filter((task) => task.status !== "done")
-      .sort((a, b) => (b.riskScore ?? 0) - (a.riskScore ?? 0));
-  }, [statusFilter, tasksWithRisk]);
+      .filter((task) => (showDone ? true : !["done", "archived"].includes(task.status)))
+      .filter((task) => (streamFilter === "all" ? true : task.stream === streamFilter))
+      .filter((task) => (priorityFilter === "all" ? true : task.priority === priorityFilter))
+      .sort(compareBoardOrder);
+  }, [priorityFilter, showDone, statusFilter, streamFilter, tasksWithRisk]);
 
   const inboxTasks = useMemo(() => {
-    return tasksWithRisk.filter(
-      (task) =>
-        task.status === "backlog" &&
-        (!task.dueDate || task.priorityLane === "P4")
-    );
+    return tasksWithRisk
+      .filter((task) => task.status === "backlog")
+      .sort((a, b) => {
+        const aNoDue = !a.dueDate;
+        const bNoDue = !b.dueDate;
+        if (aNoDue !== bNoDue) return aNoDue ? -1 : 1;
+        const aNoLane = !a.priorityLane;
+        const bNoLane = !b.priorityLane;
+        if (aNoLane !== bNoLane) return aNoLane ? -1 : 1;
+        return compareBoardOrder(a, b);
+      });
   }, [tasksWithRisk]);
 
   const focusTask = tasksWithRisk.find((task) => task.id === state.activeTaskId);
@@ -135,6 +182,7 @@ export function App() {
   const addTask = (rawValue: string) => {
     const parsed = parseQuickInput(rawValue);
     if (!parsed.title) return;
+    const dueDate = undefined;
     actions.addTask(
       buildEmptyTask({
         title: parsed.title,
@@ -143,8 +191,9 @@ export function App() {
         estimateMin: parsed.estimateMin,
         effort: parsed.estimateMin,
         tags: parsed.tags,
+        dueDate,
         status: "backlog",
-        priorityLane: "P4"
+        priorityLane: dueDate ? laneFromDate(dueDate) : "P4"
       })
     );
   };
@@ -160,17 +209,13 @@ export function App() {
   };
 
   const handleSuggestFocus = () => {
-    const candidate = [...tasksWithRisk]
-      .filter((task) => !["done", "archived"].includes(task.status))
-      .sort((a, b) => {
-        const laneWeight = ["P0", "P1"].includes(a.priorityLane)
-          ? -1
-          : ["P0", "P1"].includes(b.priorityLane)
-            ? 1
-            : 0;
-        if (laneWeight !== 0) return laneWeight;
-        return (b.riskScore ?? 0) - (a.riskScore ?? 0);
-      })[0];
+    const inLane = [...tasksWithRisk]
+      .filter((task) => ["P0", "P1"].includes(task.priorityLane) && !["done", "archived"].includes(task.status))
+      .sort(compareBoardOrder)[0];
+    const candidate =
+      inLane ??
+      [...tasksWithRisk].filter((task) => !["done", "archived"].includes(task.status)).sort(compareBoardOrder)[0];
+
     if (!candidate) return;
     dispatch({ type: "set-active", payload: candidate.id });
     setStatusMessage(`Foco sugerido: ${candidate.title}`);
@@ -234,7 +279,7 @@ export function App() {
 
   const handleTestConnection = async () => {
     if (!webAppUrl) {
-      setConnectionStatus("Para sincronizar, pegá la URL del Web App.");
+      setConnectionStatus("Para sincronizar, pegá la URL del Web App. Si no, la app queda local.");
       return;
     }
     setConnectionStatus("Probando conexión...");
@@ -252,7 +297,7 @@ export function App() {
 
   const handleSendTestTask = async () => {
     if (!webAppUrl) {
-      setConnectionStatus("Para sincronizar, pegá la URL del Web App.");
+      setConnectionStatus("Para sincronizar, pegá la URL del Web App. Si no, la app queda local.");
       return;
     }
     const now = new Date();
@@ -330,10 +375,10 @@ export function App() {
           [
             { id: "inbox", label: "Entrada" },
             { id: "board", label: "Tablero" },
-            { id: "focus", label: "Enfoque" },
+            { id: "focus", label: "Foco del día" },
             { id: "review", label: "Revisión" },
             { id: "calendar", label: "Calendario" },
-            { id: "settings", label: "Settings" }
+            { id: "settings", label: "Configuración" }
           ] as { id: View; label: string }[]
         ).map((item) => (
           <button
@@ -350,11 +395,11 @@ export function App() {
       {view === "inbox" ? (
         <section className="view">
           <HelpHint
-            title="Entrada / Captura"
+            title="Entrada / Triage"
             lines={[
               "Acá caen tareas nuevas.",
-              "Tu trabajo es asignarles fecha o carril.",
-              "Si no tienen fecha, van a P4."
+              "Tu trabajo es asignarles carril o fecha.",
+              "Sin fecha, quedan en P4."
             ]}
           />
           <TaskInput onAdd={addTask} />
@@ -365,6 +410,13 @@ export function App() {
                 task={task}
                 onSetLane={(lane) => actions.setLane(task.id, lane)}
                 onSetStatus={(status) => actions.setStatus(task.id, status)}
+                onSetDueDate={(dueDate) =>
+                  actions.updateTask({
+                    ...task,
+                    dueDate,
+                    priorityLane: dueDate ? laneFromDate(dueDate) : "P4"
+                  })
+                }
                 onBlock={() => handleBlock(task)}
                 onSelect={() => setDetailTaskId(task.id)}
               />
@@ -379,21 +431,31 @@ export function App() {
             title="Tablero por carriles"
             lines={[
               "Las columnas son prioridad temporal (P0..P4).",
-              "El estado vive dentro de cada tarjeta.",
-              "Las tareas se ordenan por riesgo dentro de cada carril."
+              "Mover una tarjeta cambia sólo el carril.",
+              "El estado y el riesgo viven dentro de la tarjeta."
             ]}
           />
           <div className="board-header">
             <label>
               Filtrar por estado
-              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as Status | "all")}> 
-                <option value="all">Todos (excepto hechas)</option>
+              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value as Status | "all")}>
+                <option value="all">Todos</option>
                 {statusOptions.map((status) => (
                   <option key={status} value={status}>
                     {status}
                   </option>
                 ))}
               </select>
+            </label>
+            <Filters
+              stream={streamFilter}
+              priority={priorityFilter}
+              onStreamChange={setStreamFilter}
+              onPriorityChange={setPriorityFilter}
+            />
+            <label>
+              <input type="checkbox" checked={showDone} onChange={(event) => setShowDone(event.target.checked)} />
+              Mostrar hechas y archivadas
             </label>
           </div>
           <div className="board">
@@ -414,6 +476,13 @@ export function App() {
                         task={task}
                         onSetStatus={(status) => actions.setStatus(task.id, status)}
                         onSetLane={(nextLane) => actions.setLane(task.id, nextLane)}
+                        onSetDueDate={(dueDate) =>
+                          actions.updateTask({
+                            ...task,
+                            dueDate,
+                            priorityLane: dueDate ? laneFromDate(dueDate) : "P4"
+                          })
+                        }
                         onBlock={() => handleBlock(task)}
                         onSelect={() => {
                           dispatch({ type: "set-active", payload: task.id });
@@ -432,11 +501,11 @@ export function App() {
       {view === "focus" ? (
         <section className="view">
           <HelpHint
-            title="Enfoque"
+            title="Foco del día"
             lines={[
-              "Elegí una sola tarea para hoy.",
-              "Priorizá P0/P1 con mayor riesgo.",
-              "Marcá bloqueos con motivo para no perder contexto."
+              "Elegí 1 tarea para hoy.",
+              "Si no sabés cuál, pedí una sugerencia.",
+              "Te mostramos por qué una tarea es riesgosa."
             ]}
           />
           <FocusTimer
@@ -462,11 +531,12 @@ export function App() {
             }}
             onSetDueDate={(date) => {
               if (!focusTask) return;
-              const riskPreview = computeRisk({ ...focusTask, dueDate: date ? new Date(date).toISOString() : undefined });
+              const dueDate = date ? new Date(date).toISOString() : undefined;
+              const riskPreview = computeRisk({ ...focusTask, dueDate });
               actions.updateTask({
                 ...focusTask,
-                dueDate: date ? new Date(date).toISOString() : undefined,
-                priorityLane: date ? laneFromDate(new Date(date).toISOString()) : "P4",
+                dueDate,
+                priorityLane: dueDate ? laneFromDate(dueDate) : "P4",
                 riskBand: riskPreview.band,
                 riskScore: riskPreview.score,
                 riskReasons: riskPreview.reasons
@@ -483,11 +553,11 @@ export function App() {
       {view === "review" ? (
         <section className="view">
           <HelpHint
-            title="Revisión diaria"
+            title="Revisión"
             lines={[
-              "Chequeá cuántas tareas cerraste hoy.",
-              "Detectá bloqueos y pendientes críticos.",
-              "Replanificá antes de cerrar el día."
+              "Revisá lo completado de hoy.",
+              "Detectá bloqueos y tareas sin foco.",
+              "Corregí rumbo antes de cerrar el día."
             ]}
           />
           <ReviewSummary
@@ -512,9 +582,9 @@ export function App() {
           <HelpHint
             title="Calendario"
             lines={[
-              "Una sola pestaña con vista Mes/Semana.",
-              "Mostramos tareas con fecha de vencimiento.",
-              "Arrastrá tareas para cambiar su fecha."
+              "Acá solo ves tareas con fecha.",
+              "Elegí vista Mes o Semana.",
+              "Podés arrastrar para cambiar el vencimiento."
             ]}
           />
           <CalendarView
@@ -533,11 +603,11 @@ export function App() {
           <div className="settings">
             <h2>Sincronización</h2>
             <HelpHint
-              title="¿Qué es esto?"
+              title="¿Para qué sirve esto?"
               lines={[
-                "La URL del Web App conecta con tu Google Sheets para sincronizar entre dispositivos.",
-                "Sin URL, la app funciona offline/local (este navegador).",
-                "Probar conexión verifica que el endpoint responda.",
+                "La URL del Web App conecta con Google Sheets para sincronizar entre dispositivos.",
+                "Sin URL, la app funciona local/offline en este navegador.",
+                "Probar conexión valida el endpoint.",
                 "Sincronizar ahora fuerza enviar/traer cambios."
               ]}
             />
@@ -561,7 +631,9 @@ export function App() {
                 onChange={(event) => setWebAppUrl(event.target.value)}
               />
             </label>
-            {!webAppUrl ? <p className="warning">Para sincronizar, pegá la URL del Web App.</p> : null}
+            {!webAppUrl ? (
+              <p className="warning">Para sincronizar, pegá la URL del Web App. Si no, la app queda local.</p>
+            ) : null}
             <div className="settings__actions">
               <button type="button" onClick={handleSaveUrl}>
                 Guardar URL
@@ -632,9 +704,12 @@ export function App() {
               <button type="button" onClick={() => setShowGuide(false)}>Cerrar</button>
             </div>
             <ol>
-              <li>Capturá tareas en Entrada y asignales fecha/carril.</li>
-              <li>Trabajá en Tablero P0..P4; estado y riesgo están en cada tarjeta.</li>
-              <li>Usá Enfoque para elegir 1 tarea y ejecutar sin distracciones.</li>
+              <li>Entrada: capturá tareas nuevas y hacé triage (fecha o carril).</li>
+              <li>Tablero: columnas P0–P4 de prioridad temporal. Estado y riesgo van en la tarjeta.</li>
+              <li>Foco del día: elegí una tarea y ejecutá; usá “Sugerir foco” si estás bloqueado.</li>
+              <li>Revisión: cerrá el día revisando hechas, bloqueadas y pendientes.</li>
+              <li>Calendario: muestra solo tareas con fecha, en Mes o Semana.</li>
+              <li>Configuración: la sync URL es opcional; sin URL la app sigue local/offline.</li>
             </ol>
           </div>
         </div>
@@ -672,7 +747,7 @@ export function App() {
                           setPaletteOpen(false);
                         }}
                       >
-                        Ir a enfoque
+                        Ir a foco del día
                       </button>
                     </div>
                   </div>

@@ -15,6 +15,7 @@ const LEGACY_STORAGE_KEY = "personal-console-state";
 const MIGRATION_KEY = "personal-console-migrated";
 const MIGRATION_V2_KEY = "personal-console-migrated-v2";
 const MIGRATION_V3_KEY = "personal-console-migrated-v3";
+const MIGRATION_V4_KEY = "personal-console-migrated-v4";
 
 function laneFromDueDate(dueDate?: string): PriorityLane {
   if (!dueDate) {
@@ -103,6 +104,26 @@ const normalizeTask = (task: Partial<Task & { dueAt?: string; blockedNote?: stri
 
 const migrateTask = (task: Task): Task => normalizeTask(task);
 
+function normalizeLegacyLaneStatus(task: Task): Task {
+  const now = new Date().toISOString();
+  const mapped = mapLegacyStatus(task.oldStatus);
+  const nextStatus = (["backlog", "in_progress", "blocked", "done", "archived"] as const).includes(task.status)
+    ? task.status
+    : mapped.status;
+  const dueLane = laneFromDueDate(task.dueDate);
+  const nextLane = task.dueDate ? task.priorityLane ?? mapped.priorityLane ?? dueLane : "P4";
+
+  return {
+    ...task,
+    status: nextStatus,
+    priorityLane: task.dueDate ? nextLane : "P4",
+    blockedSince: nextStatus === "blocked" ? task.blockedSince ?? task.updatedAt ?? now : undefined,
+    lastTouchedAt: task.lastTouchedAt ?? task.updatedAt ?? task.createdAt ?? now,
+    createdAt: task.createdAt ?? now,
+    updatedAt: task.updatedAt ?? task.createdAt ?? now
+  };
+}
+
 export async function runMigrations(): Promise<AppState | null> {
   const migrated = await localforage.getItem<boolean>(MIGRATION_KEY);
   let legacyState: AppState | null = null;
@@ -149,6 +170,14 @@ export async function runMigrations(): Promise<AppState | null> {
     const normalizedTasks = cachedTasks.map((task) => normalizeTask(task));
     await localforage.setItem(TASKS_KEY, normalizedTasks);
     await localforage.setItem(MIGRATION_V3_KEY, true);
+  }
+
+  const migratedV4 = await localforage.getItem<boolean>(MIGRATION_V4_KEY);
+  if (!migratedV4) {
+    const cachedTasks = (await localforage.getItem<Task[]>(TASKS_KEY)) ?? [];
+    const normalizedTasks = cachedTasks.map((task) => normalizeLegacyLaneStatus(normalizeTask(task)));
+    await localforage.setItem(TASKS_KEY, normalizedTasks);
+    await localforage.setItem(MIGRATION_V4_KEY, true);
   }
 
   return legacyState;
