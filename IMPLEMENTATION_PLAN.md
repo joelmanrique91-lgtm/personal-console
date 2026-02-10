@@ -1,387 +1,611 @@
-# Plan de Implementación — Personal Console (ejes independientes + riesgo + offline/sync)
+# IMPLEMENTATION_PLAN.md
 
-> **Objetivo**: corregir la app para que cumpla **exactamente** la lógica de tres ejes independientes (Prioridad/Lane, Estado y Riesgo), con límites estrictos en P0/P1, alertas justificadas y sincronización offline-first con Google Sheets (Apps Script).
+## Plan de mejora para **Personal Console** (alineación con Prioridad + Estado + Riesgo)
 
----
-
-## 1) Resumen ejecutivo (10–20 líneas)
-
-Hoy la app mezcla **prioridad temporal**, **estado** y **bloqueo** en un mismo eje (“columnas del tablero”), lo cual rompe la lógica objetivo y dificulta aplicar límites reales de capacidad. El riesgo no existe como motor explícito; sólo hay una alerta simple por “Hoy > 5”.
-
-El plan propone separar **tres ejes independientes**:
-- **Prioridad/Lane** (P0..P4) como carriles temporales con límites y WIP.
-- **Estado** (Backlog/En curso/Bloqueada/Hecha/Archivada) como situación operativa.
-- **Riesgo** como score + reglas que ordena dentro del carril y genera alertas justificadas.
-
-Se rediseña el **Tablero** para que sus columnas sean **P0..P4** y el **estado** se vea como chips/flags o filtros, manteniendo independencia. Se introduce un **Risk Engine** determinista, con razones legibles y acciones recomendadas. Se actualiza el modelo de datos, la migración, el sync offline-first (IndexedDB/localforage + cola de ops), y el contrato del Apps Script Web App para soportar los nuevos campos.
-
-Al final, la UI no pregunta “qué querés hacer”: **muestra qué estás arriesgando** si no actuás. Las vencidas y bloqueadas suben de visibilidad, P0/P1 no crecen sin control, y la revisión diaria refleja sobrecarga y estancamiento con acciones.
+> Documento de implementación propuesto tras inspección del repositorio actual. Incluye auditoría técnica, rediseño de dominio, motor de riesgo, UI, migración y validación.
 
 ---
 
-## 2) Definición de dominio (modelo de datos)
+## 0) Supuestos y límites declarados
 
-### 2.1 Entidad `Task`
-
-**Campos obligatorios**
-- `id: string` — UUID estable.
-- `title: string`
-- `priorityLane: "P0"|"P1"|"P2"|"P3"|"P4"`
-- `status: "backlog"|"in_progress"|"blocked"|"done"|"archived"`
-- `createdAt: string` (ISO)
-- `updatedAt: string` (ISO)
-- `lastTouchedAt: string` (ISO)
-- `revision: number` (incremental)
-- `isDeleted: boolean` **o** `deletedAt?: string`
-
-**Campos opcionales**
-- `description?: string`
-- `tags: string[]`
-- `effort?: number` (minutos o puntos, definir)
-- `dueDate?: string` (ISO; fecha límite)
-- `scheduledDate?: string` (ISO; planificación explícita)
-- `blockedSince?: string` (ISO)
-- `blockedNote?: string`
-- `doneAt?: string`
-- `archivedAt?: string`
-- `stream?: string` (si se mantiene “Área”)
-- `source?: "local"|"import"|"sync"`
-
-**Defaults**
-- `priorityLane` por defecto: **P4** si `dueDate` es nula (regla dura).
-- `status` por defecto: **backlog**.
-- `tags`: `[]`.
-- `lastTouchedAt`: `createdAt`.
-
-### 2.2 Enums
-- `PriorityLane = P0 | P1 | P2 | P3 | P4`
-- `Status = backlog | in_progress | blocked | done | archived`
-
-### 2.3 Campos requeridos para riesgo
-- `dueDate`, `effort`, `blockedSince`, `lastTouchedAt`, `createdAt`, `updatedAt`, `priorityLane`, `status`, `scheduledDate`.
-
-### 2.4 Índices/keys para offline
-- `id` como PK estable.
-- `revision` + `updatedAt` para conflictos.
-- `isDeleted` o `deletedAt` como tombstone.
-- `schemaVersion` en meta global para migraciones.
-
-> **Suposición mínima**: se mantiene `localforage` como persistencia (IndexedDB). Si no existiera, se migra a IndexedDB nativo.
-> **Verificación (≤5 min)**: revisar `src/sync/storage.ts` y `package.json`.
+1. Se mantiene el stack actual: **React + TypeScript + Vite** con estado global en Context/Reducer y persistencia local con **localforage (IndexedDB)**.
+2. El backend sigue siendo **Google Apps Script + Google Sheets** y ya soporta `meta/tasks/upsert`; se extenderá de forma retrocompatible.
+3. No se reemplaza la arquitectura completa (sin Redux, sin backend nuevo): el plan prioriza refactor incremental para evitar romper el modo offline.
+4. Donde falte definición funcional exacta (p. ej. pesos de riesgo), se proponen defaults configurables en Settings.
 
 ---
 
-## 3) Especificación del “Risk Engine”
+## 1) Auditoría del estado actual del repositorio
 
-### 3.1 Fórmula de score (pseudocódigo)
-```text
-score = 0
+## 1.1 Framework, estructura y componentes
 
-if status in {done, archived}: return 0
+- **Entrada y shell de app:** `src/main.tsx`, `src/App.tsx`.
+- **Vistas actuales dentro de App (sin router):** Bandeja, Tablero, Enfoque, Revisión, Calendario Mes, Calendario Semana, Settings.
+- **Componentes relevantes:**
+  - `TaskCard`, `BoardColumn`, `TaskInput`, `Filters`
+  - `FocusTimer`, `ReviewSummary`
+  - `CalendarMonth`, `CalendarWeek` (separados)
+- **Problema observado:** el tablero usa columnas por `status` (`inbox/today/week/someday/blocked/done`), mezclando prioridad temporal con estado operativo.
 
-# Vencimiento
-if dueDate exists:
-  daysToDue = daysBetween(now, dueDate)
-  if daysToDue < 0: score += 60 + abs(daysToDue) * 5
-  else if daysToDue <= 1: score += 40
-  else if daysToDue <= 3: score += 25
-  else if daysToDue <= 7: score += 15
-  else if daysToDue <= 14: score += 8
+## 1.2 Modelo de datos actual
 
-# Bloqueo
-if status == blocked:
-  daysBlocked = daysBetween(blockedSince, now)
-  score += 20 + min(daysBlocked * 3, 30)
+`Task` actual:
+- `status` mezcla conceptos de carril y estado (`inbox`, `today`, `week`, `someday`, `blocked`, `done`).
+- Tiene `priority` (low/med/high) y `stream`, pero **no** existe `PriorityLane` P0–P4.
+- Tiene `estimateMin`, `plannedAt`, `dueAt`, `blockedNote`, `revision`, `deletedAt`, etc.
+- No hay `riskScore` persistido ni motivos de riesgo.
 
-# Estancamiento
-daysStale = daysBetween(lastTouchedAt, now)
-if daysStale >= 7: score += 10
-if daysStale >= 14: score += 20
-if daysStale >= 30: score += 35
+## 1.3 Offline-first / sync actual
 
-# Esfuerzo
-if effort exists:
-  if effort >= 240: score += 10
-  if effort >= 480: score += 20
+- Persistencia local en localforage (`tasks_cache`, `ops_queue`, `sync_state`, `sync_settings`, etc.).
+- Cola de operaciones (`upsert`/`delete`) con `opId` + compactación por `taskId`.
+- Motor de sync:
+  - Push de cola en lotes.
+  - Pull incremental por `since`.
+  - Resolución de conflicto por `revision` y `updatedAt`.
+- Backend Apps Script:
+  - Sheets `Tasks` y `Ops`.
+  - Idempotencia básica por `opId` procesado.
 
-# Sobrecarga de carril
-if laneOverCapacity(priorityLane): score += 15
+## 1.4 Gaps funcionales contra la lógica objetivo
+
+1. No existen carriles P2/P3.
+2. Bandeja/Bloqueado/Hecho aparecen como columnas de tablero (deberían ser estado o flujo de entrada).
+3. No hay límites WIP reales por carril P0/P1.
+4. No hay motor de riesgo ni orden por riesgo.
+5. Enfoque no muestra diagnóstico de riesgo de la tarea seleccionada.
+6. Mes/Semana están separados en dos vistas/componentes.
+7. Settings no explica claramente la URL del Web App ni expone controles de reglas (límites/pesos/alertas).
+
+---
+
+## 2) Objetivo funcional a implementar
+
+Separar de forma explícita y obligatoria los tres ejes:
+
+- **Prioridad temporal (Lane):** `P0 Hoy`, `P1 Semana`, `P2 2-4 semanas`, `P3 60 días`, `P4 Algún día`.
+- **Estado:** `Backlog`, `En curso`, `Bloqueada`, `Hecha`, `Archivada`.
+- **Riesgo:** score calculado + banda + motivos + alertas.
+
+Reglas duras:
+1. Cualquier tarea sin fecha de vencimiento debe quedar en `P4`.
+2. P0/P1 con límite configurable y control al exceder.
+3. Vencidas / por vencer deben escalar visibilidad.
+4. Bloqueo prolongado debe generar alertas activas.
+
+---
+
+## 3) Refactor del modelo de datos
+
+## 3.1 Nuevo contrato `Task`
+
+```ts
+type PriorityLane = "P0" | "P1" | "P2" | "P3" | "P4";
+type Status = "backlog" | "in_progress" | "blocked" | "done" | "archived";
+
+type RiskBand = "low" | "medium" | "high" | "critical";
+
+interface Task {
+  id: string;
+  title: string;
+  description?: string;
+
+  // Eje 1
+  priorityLane: PriorityLane;
+
+  // Eje 2
+  status: Status;
+
+  // Tiempo y esfuerzo
+  dueDate?: string;          // ISO
+  effort?: number;           // puntos o minutos (definir unidad única)
+
+  // Trazabilidad
+  createdAt: string;
+  updatedAt: string;
+  lastTouchedAt: string;
+
+  // Bloqueo
+  blockedSince?: string;
+  blockedReason?: string;
+
+  // Clasificación
+  tags: string[];
+
+  // Sync/versionado
+  revision: number;
+  deletedAt?: string;        // tombstone
+
+  // Riesgo calculado (cacheado)
+  riskScore?: number;
+  riskBand?: RiskBand;
+  riskReasons?: string[];
+}
 ```
 
-### 3.2 Reglas discretas (alertas)
-- `overdue`: `dueDate < today`
-- `dueSoon`: `dueDate <= today + 3`
-- `blockedTooLong`: `blockedSince >= 3 días`
-- `staleTooLong`: `lastTouchedAt >= 7 días`
-- `laneOverCapacity`: `count(lane) > limit(lane)`
+## 3.2 Defaults y reglas de integridad
 
-### 3.3 Output
-- `riskScore: number`
-- `riskBand: "low"|"med"|"high"|"critical"`
-- `reasons: string[]` (mensajes justificativos)
-- `recommendedAction?: string`
+- `status` por defecto: `backlog`.
+- `priorityLane` por defecto:
+  - `P4` si `dueDate` es null/undefined.
+  - si hay `dueDate`, se asigna lane sugerido por proximidad (ver regla en sección 4).
+- Al pasar a `blocked`: set `blockedSince` si estaba vacío.
+- Al salir de `blocked`: limpiar `blockedSince`/`blockedReason` o mantener histórico según decisión (recomendado mantener sólo campo activo + eventos en log).
+- `lastTouchedAt` se actualiza en cualquier cambio semántico.
 
-### 3.4 Ordenamiento dentro de carril
-1) `riskBand` (Critical > High > Med > Low)
-2) `riskScore` desc
-3) `dueDate` asc (nulas al final)
-4) `createdAt` asc
+## 3.3 Índices necesarios en IndexedDB/localforage
 
----
+Como localforage no expone índices relacionales, definir **índices lógicos en memoria** + persistencia optimizada por claves:
 
-## 4) Corrección de UI / navegación (por tab)
+- `tasks_by_id` (mapa principal).
+- `tasks_by_lane` (P0..P4) para tablero.
+- `tasks_by_status` para filtros y review.
+- `tasks_by_dueDate` para calendario y alertas.
+- `tasks_by_risk` (derivado, no persistencia obligatoria).
 
-### 4.1 Bandeja
-**Ahora**: lista de tareas `inbox`.
+Si se migra a Dexie en fase futura:
+- PK: `id`
+- índices: `[priorityLane+status]`, `dueDate`, `updatedAt`, `lastTouchedAt`, `blockedSince`, `deletedAt`, `revision`.
 
-**Debe ser**: tareas nuevas **sin clasificación** o `status=backlog` sin lane asignada. Acciones rápidas:
-- Asignar `priorityLane` (P0..P4)
-- Cambiar `status` (backlog/in_progress/blocked)
-- Setear `dueDate` o `scheduledDate`
-- “Enviar a P4” (Algún día)
+## 3.4 Control de versiones y tombstones
 
-### 4.2 Tablero (rediseño obligatorio)
-**Opción A (recomendada)**: columnas = **Prioridad (P0..P4)**; estado se visualiza como **chips** y se filtra por estado.
-
-**Justificación**: preserva independencia real de ejes y evita columnas mezcladas (“Bloqueado/Hecho”).
-
-**Requerimientos del tablero**:
-- Límites por carril (WIP) en header.
-- Indicador de sobrecarga (% y color).
-- Comportamiento al exceder:
-  - P0/P1: hard block (no se mueve/crea sin excepción).
-  - P2/P3: warning (permite).
-  - P4: sin límite.
-
-### 4.3 Enfoque
-- Selección desde tablero.
-- Mostrar: `riskBand`, `reasons`, `dueDate`, `blockedSince`, `effort`.
-- CTA: “Registrar Focus hoy”, “Resolver riesgo principal”.
-- Al bloquear: set `status=blocked` y `blockedSince`.
-
-### 4.4 Revisión
-- Métricas: vencidas, sobrecarga por carril, bloqueadas largas, estancadas, completadas.
-- Acciones:
-  - “Reevaluar P0 del día” → re-lanear según `dueDate` + `riskScore`.
-  - “Mover backlog estancado a P4”.
-
-### 4.5 Calendario Mes/Semana
-- Mostrar tareas con `scheduledDate` y/o `dueDate`.
-- Diferenciar: `scheduledDate` vs `dueDate` (deadline) con color de riesgo.
-- Vencidas resaltadas.
-
-### 4.6 Settings
-- Checklist de sync: URL configurada, estado online/offline, última sync, ops pendientes.
-- Diagnóstico: ver cola, ver errores de sync.
-- Import/Export con validación y versión de schema.
+- Mantener `revision` incremental por tarea.
+- Borrado lógico vía `deletedAt` (no hard delete en cliente ni servidor).
+- Mantener `schemaVersion` en almacenamiento local y en backend (`meta`).
+- Cada migración debe ser idempotente (`if already migrated -> skip`).
 
 ---
 
-## 5) Reglas de límites (WIP / capacidad por carril)
+## 4) Motor de riesgo (risk engine)
 
-**Defaults propuestos**
-- P0: 3
-- P1: 7
-- P2: 10
-- P3: 15
-- P4: sin límite (warning opcional)
+## 4.1 Variables de entrada
 
-**Hard block vs soft warning**
-- P0/P1: hard block al intentar agregar/mover si `count > limit`.
-- P2/P3: warning no bloqueante.
+- Días a vencimiento (`daysToDue`)
+- `effort`
+- Días bloqueada (`daysBlocked`)
+- Días sin tocar (`daysStale` desde `lastTouchedAt`)
+- Sobrecarga del carril (`laneLoad / laneLimit`)
 
-**Excepción**
-- Si la tarea está `overdue` o `dueSoon`, puede “forzar visibilidad” en P0/P1 sin incrementar el límite (se muestra en sección “Críticas”).
+## 4.2 Fórmula propuesta (configurable por pesos)
 
----
+```ts
+function calcRisk(task, laneStats, cfg, now): RiskResult {
+  if (task.status === "done" || task.status === "archived" || task.deletedAt) {
+    return { score: 0, band: "low", reasons: [] };
+  }
 
-## 6) Arquitectura offline-first + Sync
+  let score = 0;
+  const reasons: string[] = [];
 
-### 6.1 Source of Truth
-- Google Sheets vía Apps Script Web App si `webAppUrl` está configurado.
-- Fallback local (IndexedDB/localforage).
+  // 1) Vencimiento
+  if (!task.dueDate) {
+    score += cfg.noDuePenalty; // bajo, pero no cero
+    reasons.push("Sin fecha de vencimiento (debe vivir en P4)");
+  } else {
+    const d = daysBetween(now, task.dueDate);
+    if (d < 0) { score += cfg.overdueBase + Math.min(Math.abs(d) * cfg.overduePerDay, cfg.overdueCap); reasons.push("Tarea vencida"); }
+    else if (d <= 1) { score += cfg.dueIn1d; reasons.push("Vence en ≤ 1 día"); }
+    else if (d <= 3) { score += cfg.dueIn3d; reasons.push("Vence en ≤ 3 días"); }
+    else if (d <= 7) { score += cfg.dueIn7d; reasons.push("Vence esta semana"); }
+  }
 
-### 6.2 Storage local (IndexedDB)
-**Tablas/keys**
-- `tasks`
-- `opsQueue`
-- `meta` (schemaVersion, lastSync)
-- `logs` (errores de sync)
+  // 2) Esfuerzo
+  if (task.effort && task.effort >= cfg.highEffortThreshold) {
+    score += cfg.highEffortPenalty;
+    reasons.push("Esfuerzo alto");
+  }
 
-### 6.3 OpsQueue (idempotencia)
-- `opId`, `taskId`, `type`, `payload`, `timestamp`, `baseRevision`, `dedupeKey`, `retryCount`, `lastError`.
-- `dedupeKey = taskId + type + revision`.
+  // 3) Bloqueo
+  if (task.status === "blocked" && task.blockedSince) {
+    const b = daysBetween(task.blockedSince, now);
+    score += Math.min(cfg.blockedBase + b * cfg.blockedPerDay, cfg.blockedCap);
+    reasons.push(`Bloqueada hace ${b} días`);
+  }
 
-### 6.4 Política de conflictos
-- **Last-write-wins** por `revision` + `updatedAt`.
-- Si gana server: reemplazar local.
-- Si gana local: re-enqueue upsert.
+  // 4) Estancamiento
+  const s = daysBetween(task.lastTouchedAt, now);
+  if (s >= cfg.staleDays) {
+    score += Math.min((s - cfg.staleDays + 1) * cfg.stalePerDay, cfg.staleCap);
+    reasons.push(`Sin actividad hace ${s} días`);
+  }
 
-### 6.5 Endpoints esperados (Apps Script)
-- `GET ?route=meta` → `{ ok, serverTime, schemaVersion, sheets }`
-- `GET ?route=pull&since=ISO` → `{ ok, tasks, serverTime }` (alias de `tasks` actual)
-- `POST ?route=push` → `{ ok, applied[], rejected[] }` (alias de `upsert` actual)
-- `POST ?route=test` → echo simple
+  // 5) Sobrecarga de carril
+  const lane = laneStats[task.priorityLane];
+  if (lane.limit > 0 && lane.count > lane.limit) {
+    const overloadRatio = (lane.count - lane.limit) / lane.limit;
+    score += Math.min(cfg.overloadBase + overloadRatio * cfg.overloadFactor, cfg.overloadCap);
+    reasons.push(`Carril ${task.priorityLane} sobrecargado`);
+  }
 
-### 6.6 Export/Import
-- JSON con `{ schemaVersion, tasks, focusSessions?, opsQueue? }`.
-- Validación de schema y migraciones versionadas.
+  const band = score >= cfg.bandCritical ? "critical"
+            : score >= cfg.bandHigh ? "high"
+            : score >= cfg.bandMedium ? "medium"
+            : "low";
 
----
+  return { score: round(score, 1), band, reasons };
+}
+```
 
-## 7) Plan de migración desde el modelo actual
+## 4.3 Bandas de riesgo (default)
 
-### 7.1 Mapeo de columnas actuales
-- “Bandeja” → `status=backlog`, `priorityLane` inferida (sin dueDate → P4).
-- “Hoy” → `priorityLane=P0`.
-- “Semana” → `priorityLane=P1`.
-- “Algún día” → `priorityLane=P4`.
-- “Bloqueado” → `status=blocked`, `priorityLane` conserva o default P2.
-- “Hecho” → `status=done`.
+- `low`: 0–24
+- `medium`: 25–49
+- `high`: 50–74
+- `critical`: 75+
 
-### 7.2 Migración sin perder info
-- `plannedAt` → `scheduledDate`.
-- `dueAt` → `dueDate`.
-- `blockedSince` = `updatedAt` si no existe.
-- `lastTouchedAt` = `updatedAt` si no existe.
+## 4.4 Reglas de alerta
 
-### 7.3 Backfill
-- Si no hay `dueDate`: `priorityLane=P4`.
-- `isDeleted` a partir de `deletedAt`.
+- **Alerta vencida:** inmediata, prioridad máxima.
+- **Alerta por vencer:** dentro de 72h.
+- **Alerta bloqueo prolongado:** `blockedSince >= 3 días` (configurable).
+- **Alerta estancamiento:** `lastTouchedAt >= 7 días`.
+- **Alerta sobrecarga:** carril supera límite.
 
----
+## 4.5 Orden en tablero por carril
 
-## 8) Plan de trabajo por fases (estimación cualitativa)
-
-### Fase 0 — Auditoría del repo (XS)
-Comandos:
-- `rg "TaskStatus|status" src`
-- `rg "sync" src`
-- `rg "localforage" src`
-- `rg "Board" src/components`
-
-### Fase 1 — Refactor dominio y store (M)
-- Actualizar `types` con nuevos enums y campos.
-- Ajustar `store` y `buildEmptyTask`.
-- Nueva migración.
-
-### Fase 2 — Tablero (M/L)
-- Columnas por `priorityLane`.
-- Chips de estado y filtros.
-- Límites por carril (hard/soft).
-
-### Fase 3 — Risk Engine + alertas (M)
-- Crear motor de riesgo y tests.
-- Banners, badges, y ordenamiento por riesgo.
-
-### Fase 4 — Enfoque + Revisión + Calendarios (M)
-- Mostrar riesgo y razones.
-- Métricas de revisión alineadas.
-- Calendarios con `scheduledDate`/`dueDate`.
-
-### Fase 5 — Sync robusto + export/import + diagnóstico (M)
-- Ajustar cola e idempotencia.
-- Actualizar contrato Apps Script.
-- Validación de schema.
-
-### Fase 6 — QA, e2e, accesibilidad, performance (M)
-- Unit tests, UI tests, offline/sync tests.
+Dentro de cada columna P0..P4:
+1. `riskBand` (critical > high > medium > low)
+2. `riskScore` descendente
+3. `dueDate` más cercana primero (sin fecha al final)
+4. `updatedAt` más antigua primero (para visibilizar abandono)
 
 ---
 
-## 9) Pruebas (obligatorio)
+## 5) Rediseño de tablero y semántica de estados
 
-**Unit tests (Risk Engine)**
-- `overdue`
-- `dueSoon`
-- `blockedTooLong`
-- `staleTooLong`
-- `laneOverCapacity`
+## 5.1 Tablero = solo carriles de prioridad
 
-**Migraciones**
-- Dataset viejo → nuevo (lane/status/riesgo).
+- Columnas horizontales fijas: `P0`, `P1`, `P2`, `P3`, `P4`.
+- Eliminar columnas actuales que mezclan conceptos: “Bandeja”, “Bloqueado”, “Hecho”.
+- Cada tarjeta muestra:
+  - título
+  - fecha con semáforo (rojo/amarillo/verde/gris sin fecha)
+  - esfuerzo
+  - tags
+  - icono/chip de estado (`backlog/in_progress/blocked/done/archived`)
+  - banda o score de riesgo
 
-**UI**
-- Drag/drop entre carriles.
-- Límites P0/P1.
-- Filtros por estado.
+## 5.2 Límites configurables por carril (WIP)
 
-**Offline/Sync**
-- Cola, retries, dedupe.
-- Conflictos y LWW.
+Defaults sugeridos:
+- P0: 5
+- P1: 12
+- P2: 20
+- P3: 30
+- P4: sin límite (0 = ilimitado)
+
+Comportamiento:
+- Mostrar `count/limit` en header de columna.
+- Si `count > limit`: columna con estilo de sobrecarga + alerta en Review.
+- En P0/P1, bloquear creación/movimiento cuando excede límite (permitir bypass sólo con confirmación explícita “Forzar por riesgo crítico”).
+
+## 5.3 Bandeja (Backlog/Input Queue)
+
+Definición:
+- “Bandeja” deja de ser carril del tablero.
+- Es una **vista de captura y triage** de tareas nuevas (`status=backlog`) pendientes de planificación.
+- Acciones en Bandeja:
+  - asignar `dueDate`
+  - asignar `priorityLane`
+  - mover a `in_progress`
+  - enviar a `P4` si no hay fecha
+
+## 5.4 Bloqueado como estado (no columna)
+
+- `status = blocked` + `blockedSince` + `blockedReason` obligatorio.
+- Desbloquear = cambio de estado a `backlog` o `in_progress` y limpieza/registro del bloqueo.
+- Alertas:
+  - warning a partir de N días bloqueada.
+  - crítico a partir de N2 días.
 
 ---
 
-## 10) Criterios de aceptación (checklist)
-- [ ] Prioridad, estado y riesgo son independientes.
-- [ ] P0/P1 límites funcionando (hard/soft según definición).
-- [ ] Vencidas/dueSoon resaltadas con razón explícita.
-- [ ] Bloqueadas demasiado tiempo alertan.
-- [ ] Sin fecha caen a P4.
-- [ ] Revisión diaria refleja sobrecarga/estancamiento con acciones.
-- [ ] Enfoque muestra “qué estás arriesgando” (reasons + recommendedAction).
+## 6) Vista Enfoque, Revisión y Calendario unificado
+
+## 6.1 Vista **Enfoque** (panel contextual)
+
+Trigger: seleccionar tarjeta del tablero.
+
+Contenido mínimo:
+- título + descripción
+- `effort`, `priorityLane`, `status`, `dueDate`
+- `riskScore` + `riskBand`
+- lista de `riskReasons`
+- alertas activas
+
+Acciones rápidas:
+- cambiar estado
+- marcar/desmarcar bloqueada
+- reprogramar `dueDate`
+- mover carril
+- archivar
+
+## 6.2 Vista **Revisión**
+
+Métricas diarias:
+- tareas vencidas
+- tareas por vencer 72h
+- bloqueadas prolongadas
+- estancadas
+- completadas hoy
+- sobrecarga por carril
+
+Acciones:
+- “Mover pendientes críticos a P0/P1” (respetando límites)
+- “Reasignar sin fecha a P4”
+- “Descongestionar P0/P1” (sugerencia a P2/P3)
+
+## 6.3 Componente único **Calendario**
+
+Crear `Calendario` con selector `Mes | Semana` en un mismo componente.
+
+- Renderiza sólo tareas con `dueDate`.
+- Colorea o etiqueta por `priorityLane`.
+- Permite drag/drop para cambiar `dueDate`.
+- Mantiene consistencia de lane sugerido tras cambio de fecha.
 
 ---
 
-## 11) Riesgos técnicos + mitigación
-- **Drag/drop y performance** → memoización/virtualización.
-- **Conflictos de sync** → LWW + logs.
-- **Migraciones** → versionado y fallback seguro.
-- **Mobile usability** → tablero vertical + chips compactos.
+## 7) Replanteo de Settings
+
+## 7.1 Mensajería y ayuda
+
+Explicar en UI:
+- **URL del Web App:** endpoint de Google Apps Script que sincroniza tareas entre dispositivos usando Google Sheets.
+- **Test connection:** valida acceso a `route=meta` y muestra diagnóstico.
+- **Send TEST task:** envía una tarea de prueba para verificar escritura.
+- **Sync now:** fuerza push/pull inmediato de cambios pendientes.
+
+## 7.2 Controles nuevos
+
+Agregar paneles para:
+1. Límites por carril (P0..P4).
+2. Pesos del motor de riesgo.
+3. Frecuencia de alertas/notificaciones.
+4. Umbrales de bloqueo/estancamiento.
+
+## 7.3 Estado de sync comprensible
+
+Mostrar:
+- Online/Offline
+- Última sync exitosa (hora local)
+- Ops pendientes (cantidad)
+- Errores recientes de sync
+- Conflictos resueltos (contador)
 
 ---
 
-## 12) Lista exacta de archivos a tocar (según repo real)
+## 8) Estrategia de migración de datos existentes
 
-### Dominio / Store
-- `src/store/types.ts`
-  - Agregar `priorityLane`, nuevos enums, campos de riesgo.
-- `src/store/store.tsx`
-  - Ajustar reducers, `setStatus`, `buildEmptyTask`.
-- `src/store/migrations/index.ts`
-  - Migrar status → lane + status, backfill de campos.
+## 8.1 Mapeo de esquema actual -> nuevo
 
-### Risk Engine
-- `src/risk/engine.ts` (nuevo)
-  - Cálculo de score/band/reasons.
-- `src/utils/date.ts`
-  - Helpers de días (si faltan).
+- `status: inbox` -> `status: backlog`, `priorityLane: P4` (si no dueDate)
+- `status: today` -> `priorityLane: P0`, `status: in_progress` (o backlog según heurística)
+- `status: week` -> `priorityLane: P1`, `status: in_progress|backlog` según uso actual
+- `status: someday` -> `priorityLane: P4`, `status: backlog`
+- `status: blocked` -> `status: blocked`, `priorityLane` inferida por `dueAt` o fallback P2
+- `status: done` -> `status: done`, lane conservado o inferido por due
 
-### UI
-- `src/App.tsx`
-  - Rediseño de tablero por carriles.
-  - Ajustes en Bandeja/Review/Focus.
-- `src/components/BoardColumn.tsx`
-  - WIP + indicador sobrecarga.
-- `src/components/TaskCard.tsx`
-  - Chips de estado + badge de riesgo.
-- `src/components/ReviewSummary.tsx`
-  - Nuevas métricas y acciones.
-- `src/components/FocusTimer.tsx`
-  - Razones de riesgo y recomendación.
-- `src/components/CalendarMonth.tsx`
-  - Mostrar `scheduledDate`/`dueDate`.
-- `src/components/CalendarWeek.tsx`
-  - Mostrar `scheduledDate`/`dueDate`.
+Conversión campos:
+- `dueAt` -> `dueDate`
+- `estimateMin` -> `effort` (unidad temporal)
+- `blockedNote` -> `blockedReason`
+- `updatedAt` -> `lastTouchedAt` si faltara
 
-### Sync / Offline
-- `src/sync/storage.ts`
-  - Schema version + meta.
-- `src/sync/queue.ts`
-  - dedupeKey + retries.
-- `src/sync/engine.ts`
-  - Conflictos LWW + nuevos campos.
-- `src/sync/importExport.ts`
-  - Validación schema + migraciones.
-- `src/services/api.ts`
-  - Ajustar contratos `pull/push`.
+## 8.2 Reglas de backfill
 
-### Backend Apps Script
-- `apps-script/Code.gs`
-  - Actualizar headers y mapping de Task.
+- Tarea sin `dueDate`: forzar `priorityLane = P4`.
+- Si no hay `blockedSince` y `status=blocked`: usar `updatedAt`.
+- Si faltan `createdAt/updatedAt`: usar timestamp de migración.
 
-### Docs
-- `README.md`
-  - Lógica de ejes y riesgo.
-- `README_BACKEND.md`
-  - Contratos nuevos del Web App.
+## 8.3 Migración por versiones
+
+- `schemaVersion: 1 -> 2` (nuevo dominio).
+- Script de migración idempotente en `src/store/migrations`.
+- Después de migrar:
+  - recalcular riesgo de todas las tareas
+  - encolar upserts para sincronizar esquema nuevo al backend
+
+---
+
+## 9) Offline-first + sincronización (idempotencia y conflictos)
+
+## 9.1 Cola de operaciones
+
+Operaciones sugeridas:
+- `UPSERT_TASK`
+- `DELETE_TASK` (tombstone)
+- opcional: `PATCH_TASK_FIELDS`
+
+Campos por op:
+- `opId` UUID
+- `taskId`
+- `type`
+- `payload`
+- `createdAt`
+- `baseRevision`
+- `retryCount`
+
+Idempotencia:
+- servidor guarda `opId` procesados (ya existe hoja Ops)
+- reintentos con mismo `opId` no duplican efectos
+
+## 9.2 Resolución de conflictos
+
+Política mínima:
+1. Comparar `revision`.
+2. Si empatan, comparar `updatedAt`.
+3. Si persiste empate raro: preferir server + registrar conflicto.
+
+Además:
+- guardar log de conflictos para debugging.
+- exponer contador en Settings.
+
+## 9.3 Contrato backend Apps Script (extensión)
+
+Mantener rutas existentes + retrocompatibilidad:
+- `GET ?route=meta`
+- `GET ?route=tasks&since=...`
+- `POST ?route=upsert`
+
+Cambios:
+- ampliar columnas de `Tasks` para nuevos campos (`priorityLane`, `description`, `effort`, `blockedSince`, `blockedReason`, `lastTouchedAt`, `riskScore`, `riskBand`, `riskReasons`, `schemaVersion` opcional).
+- soportar lectura de filas viejas con defaults.
+
+---
+
+## 10) Plan por fases con criterios de aceptación y pruebas
+
+## Fase 1 — Auditoría y contrato (1–2 días)
+
+Entregables:
+- ADR corta de dominio (3 ejes independientes).
+- Tipos `Task`, `PriorityLane`, `Status` definidos.
+- Documento de mapping de migración validado.
+
+Aceptación:
+- Se aprueba contrato de datos y reglas de negocio.
+
+Pruebas:
+- unit: validadores de enums/defaults.
+
+## Fase 2 — Refactor modelo + migraciones (2–3 días)
+
+Entregables:
+- Nuevo modelo en `store/types`.
+- Migración v2->v3 idempotente.
+- Adaptación de storage/sync payload.
+
+Aceptación:
+- Datos antiguos abren sin pérdida.
+- Todas las tareas quedan con lane y estado válidos.
+
+Pruebas:
+- unit migración:
+  - mapea `today/week/someday` correctamente
+  - fuerza P4 sin `dueDate`
+  - conserva `revision/deletedAt`
+
+## Fase 3 — Motor de riesgo y alertas (2 días)
+
+Entregables:
+- `riskEngine.ts` puro y testeable.
+- cálculo de score/banda/motivos.
+- sorting por riesgo en carriles.
+
+Aceptación:
+- vencidas y bloqueadas prolongadas aparecen primero.
+- bandas de riesgo consistentes con casos de prueba.
+
+Pruebas:
+- unit:
+  - overdue > dueSoon > normal
+  - blocked 5 días sube score
+  - stale + overload incrementan score
+  - done/archived => score 0
+
+## Fase 4 — Tablero P0–P4 + límites (2–4 días)
+
+Entregables:
+- Board columnas sólo por lane.
+- chips de estado en tarjetas.
+- control de límites WIP configurable.
+
+Aceptación:
+- existen P2 y P3 visibles.
+- no existe columna Bloqueado/Hecho/Bandeja en tablero.
+- bloqueo de nuevas tarjetas cuando P0/P1 exceden límite.
+
+Pruebas:
+- e2e drag/drop:
+  - mover a P0 cuando límite lleno => bloquea con mensaje
+  - mover a P2 con límite lleno => warning configurable
+
+## Fase 5 — Enfoque + Revisión + Calendario unificado (3–4 días)
+
+Entregables:
+- Enfoque con panel de riesgo y acciones rápidas.
+- Review con métricas diarias + replanificación.
+- nuevo `Calendario` (selector mes/semana).
+
+Aceptación:
+- seleccionar tarjeta muestra diagnóstico de riesgo.
+- calendario único renderiza ambos modos.
+
+Pruebas:
+- e2e:
+  - selección en board abre detalle enfoque
+  - cambio de fecha en calendario impacta lane/riesgo
+
+## Fase 6 — Settings y UX de sync (1–2 días)
+
+Entregables:
+- texto explicativo claro de URL Web App y botones.
+- controles de límites/pesos/frecuencia.
+- estado de sync entendible.
+
+Aceptación:
+- usuario comprende para qué sirve cada acción de sync.
+- se visualiza estado online/offline y pendientes.
+
+Pruebas:
+- e2e con mocks API:
+  - test connection OK/FAIL
+  - sync now consume cola
+
+## Fase 7 — Hardening, QA y rollout (2 días)
+
+Entregables:
+- suite mínima unit + e2e.
+- checklist de regresión offline.
+- plan de rollout por feature flags simples.
+
+Aceptación:
+- app usable offline con sync diferido.
+- migraciones y conflictos estables.
+
+Pruebas críticas finales:
+1. **Límites P0/P1**
+2. **Orden por riesgo por carril**
+3. **Alertas de bloqueo prolongado**
+4. **Migración desde esquema viejo**
+5. **Sync idempotente reintentable**
+
+---
+
+## 11) Stubs y verificación en 5 minutos (si faltara backend/config)
+
+Si no hay Apps Script desplegado o hay dudas de contrato:
+
+1. Crear mock local rápido (`npm run dev`) con MSW o endpoint fake para:
+   - `GET /meta`
+   - `GET /tasks?since=`
+   - `POST /upsert`
+2. Simular:
+   - respuesta OK
+   - conflicto (`rejected` con `serverTask`)
+   - timeout/offline
+3. Verificar en 5 minutos:
+   - `Sync now` procesa cola
+   - contador de pendientes baja
+   - conflicto se resuelve y queda registrado
+
+Checklist express (manual):
+- crear tarea sin `dueDate` => cae en P4
+- mover 6 tareas a P0 con límite 5 => bloqueo
+- marcar tarea como bloqueada + 4 días => alerta visible
+- tarea vencida aparece arriba de su carril
+
+---
+
+## 12) Resultado esperado al finalizar
+
+- Tablero coherente por prioridad temporal (P0–P4).
+- Estado desacoplado de carril.
+- Riesgo visible, explicable y accionable por tarea.
+- Bandeja como captura/triage, no carril.
+- Bloqueado como estado con semántica completa.
+- Calendario único mes/semana.
+- Settings entendible para sync + reglas.
+- Migración segura desde esquema actual.
+- Offline-first robusto con idempotencia y conflictos controlados.
