@@ -52,7 +52,7 @@ function buildUrl(baseUrl: string, route: string, params?: Record<string, string
   return url.toString();
 }
 
-async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
+async function fetchJson<T>(input: string, init?: globalThis.RequestInit): Promise<T> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
   try {
@@ -66,7 +66,7 @@ async function fetchJson<T>(input: string, init?: RequestInit): Promise<T> {
   }
 }
 
-async function fetchWithStatus<T>(input: string, init?: RequestInit): Promise<FetchStatus<T>> {
+async function fetchWithStatus<T>(input: string, init?: globalThis.RequestInit): Promise<FetchStatus<T>> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), DEFAULT_TIMEOUT_MS);
   try {
@@ -75,7 +75,7 @@ async function fetchWithStatus<T>(input: string, init?: RequestInit): Promise<Fe
     let body: T | string = text;
     try {
       body = text ? (JSON.parse(text) as T) : text;
-    } catch (error) {
+    } catch {
       body = text;
     }
     return { status: response.status, ok: response.ok, body };

@@ -1,39 +1,59 @@
-import { Task, TaskStatus } from "../store/types";
+import { PriorityLane, Status, Task } from "../store/types";
 
-const statusLabels: Record<TaskStatus, string> = {
-  inbox: "Bandeja",
-  today: "Hoy",
-  week: "Semana",
-  someday: "Algún día",
-  blocked: "Bloqueado",
-  done: "Hecho"
+const statusLabels: Record<Status, string> = {
+  backlog: "Backlog",
+  in_progress: "En curso",
+  blocked: "Bloqueada",
+  done: "Hecha",
+  archived: "Archivada"
 };
 
-const priorityLabels: Record<Task["priority"], string> = {
-  high: "Alta",
-  med: "Media",
-  low: "Baja"
+const laneLabels: Record<PriorityLane, string> = {
+  P0: "Hoy",
+  P1: "Semana",
+  P2: "Mes",
+  P3: "60 días",
+  P4: "Algún día"
 };
+
+const riskLabels = {
+  critical: "Crítico",
+  high: "Alto",
+  medium: "Medio",
+  low: "Bajo"
+} as const;
 
 interface TaskCardProps {
   task: Task;
-  onMove: (status: TaskStatus) => void;
   onSelect?: () => void;
+  onSetStatus?: (status: Status) => void;
+  onSetLane?: (lane: PriorityLane) => void;
+  onBlock?: () => void;
+  compact?: boolean;
 }
 
-export function TaskCard({ task, onMove, onSelect }: TaskCardProps) {
+function dueLabel(task: Task): string {
+  if (!task.dueDate) {
+    return "Sin fecha";
+  }
+  const due = new Date(task.dueDate);
+  const now = new Date();
+  const days = Math.ceil((due.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+  if (days < 0) return "Vencida";
+  if (days <= 3) return "Vence pronto";
+  return due.toLocaleDateString("es-ES");
+}
+
+export function TaskCard({ task, onSelect, onSetStatus, onSetLane, onBlock, compact }: TaskCardProps) {
   const isSelectable = Boolean(onSelect);
   return (
-    <div
+    <article
       className={`task-card${isSelectable ? " task-card--selectable" : ""}`}
-      draggable={isSelectable}
       onClick={onSelect}
       role={isSelectable ? "button" : undefined}
       tabIndex={isSelectable ? 0 : undefined}
       onKeyDown={(event) => {
-        if (!isSelectable) {
-          return;
-        }
+        if (!isSelectable) return;
         if (event.key === "Enter" || event.key === " ") {
           event.preventDefault();
           onSelect?.();
@@ -42,34 +62,51 @@ export function TaskCard({ task, onMove, onSelect }: TaskCardProps) {
     >
       <div className="task-card__header">
         <h4>{task.title}</h4>
-        <span className={`pill pill--${task.priority}`}>{priorityLabels[task.priority]}</span>
+        <span className={`status-chip status-chip--${task.status}`}>{statusLabels[task.status]}</span>
       </div>
       <p className="task-card__meta">
-        {task.stream}
-        {task.estimateMin ? ` · ${task.estimateMin}m` : ""}
+        {laneLabels[task.priorityLane]} · {dueLabel(task)}
+        {task.effort ? ` · ${task.effort}m` : ""}
       </p>
-      {task.blockedNote ? <p className="task-card__notes">{task.blockedNote}</p> : null}
-      {task.tags && task.tags.length > 0 ? (
+      {task.riskBand ? (
+        <p className={`risk-pill risk-pill--${task.riskBand}`}>
+          Riesgo {riskLabels[task.riskBand]}{task.riskScore ? ` (${task.riskScore})` : ""}
+        </p>
+      ) : null}
+      {task.riskReasons && task.riskReasons.length > 0 ? (
+        <p className="task-card__notes">{task.riskReasons.slice(0, 2).join(" · ")}</p>
+      ) : null}
+      {task.tags.length > 0 ? (
         <div className="task-card__tags">
           {task.tags.map((tag) => (
             <span key={tag}>#{tag}</span>
           ))}
         </div>
       ) : null}
-      <div className="task-card__actions">
-        {Object.entries(statusLabels)
-          .filter(([status]) => status !== task.status)
-          .map(([status, label]) => (
-            <button
-              key={status}
-              type="button"
-              onClick={() => onMove(status as TaskStatus)}
-              aria-label={`Mover a ${label}`}
+      {!compact ? (
+        <div className="task-card__actions" onClick={(event) => event.stopPropagation()}>
+          {onSetStatus ? (
+            <>
+              <button type="button" onClick={() => onSetStatus("in_progress")}>En curso</button>
+              <button type="button" onClick={onBlock}>Bloquear</button>
+              <button type="button" onClick={() => onSetStatus("done")}>Hecha</button>
+            </>
+          ) : null}
+          {onSetLane ? (
+            <select
+              value={task.priorityLane}
+              onChange={(event) => onSetLane(event.target.value as PriorityLane)}
+              aria-label="Asignar carril"
             >
-              {label}
-            </button>
-          ))}
-      </div>
-    </div>
+              {Object.entries(laneLabels).map(([value, label]) => (
+                <option key={value} value={value}>
+                  {value} · {label}
+                </option>
+              ))}
+            </select>
+          ) : null}
+        </div>
+      ) : null}
+    </article>
   );
 }

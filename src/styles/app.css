@@ -705,3 +705,49 @@ button:active,
     grid-template-columns: repeat(6, minmax(200px, 1fr));
   }
 }
+
+.help-hint {
+  background: #eef6ff;
+  border: 1px solid #c9e0ff;
+  border-radius: 12px;
+  padding: 12px;
+  margin-bottom: 16px;
+}
+
+.help-hint ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.board-column__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.status-chip {
+  border-radius: 999px;
+  font-size: 0.7rem;
+  padding: 3px 8px;
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.status-chip--backlog { background: #e9eef5; }
+.status-chip--in_progress { background: #d2e8ff; }
+.status-chip--blocked { background: #ffe0e0; }
+.status-chip--done { background: #dbf6df; }
+.status-chip--archived { background: #e8e8e8; }
+
+.risk-pill {
+  display: inline-block;
+  border-radius: 999px;
+  padding: 4px 10px;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+.risk-pill--critical { background: #ffb5b5; color: #8f1212; }
+.risk-pill--high { background: #ffdcb5; color: #8c4a00; }
+.risk-pill--medium { background: #ffeeb7; color: #6a5a00; }
+.risk-pill--low { background: #daf1da; color: #1f6a24; }
