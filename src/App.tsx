@@ -6,7 +6,7 @@ import { FocusTimer } from "./components/FocusTimer";
 import { ReviewSummary } from "./components/ReviewSummary";
 import { TaskCard } from "./components/TaskCard";
 import { TaskInput } from "./components/TaskInput";
-import { fetchMetaWithStatus } from "./services/api";
+import { fetchDiagWithStatus, fetchMetaWithStatus } from "./services/api";
 import { buildEmptyTask, useStore } from "./store/store";
 import {
   PriorityLane,
@@ -91,8 +91,18 @@ export function App() {
   const [statusMessage, setStatusMessage] = useState("");
   const [webAppUrl, setWebAppUrl] = useState("");
   const [workspaceKey, setWorkspaceKey] = useState("");
-  const [connectionStatus, setConnectionStatus] = useState("");
+  const [lastStatus, setLastStatus] = useState("");
+  const [syncAlert, setSyncAlert] = useState<string | null>(null);
+  const [spreadsheetId, setSpreadsheetId] = useState<string | null>(null);
   const [spreadsheetUrl, setSpreadsheetUrl] = useState<string | null>(null);
+  const [diagSummary, setDiagSummary] = useState<{
+    tasksRowCount: number;
+    opsRowCount: number;
+    eventsRowCount: number;
+    focusRowCount: number;
+    spreadsheetId?: string;
+    spreadsheetUrl?: string;
+  } | null>(null);
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [calendarMode, setCalendarMode] = useState<CalendarMode>("month");
   const [statusFilter, setStatusFilter] = useState<Status | "all">("all");
@@ -121,8 +131,16 @@ export function App() {
     syncNow,
     lastServerTime,
     lastSyncAt,
-    lastError
+    lastError,
+    clientId,
+    lastSyncRequestSummary,
+    lastSyncResponseSummary,
+    lastStatus: engineLastStatus
   } = useSyncEngine(actions.replaceTasks);
+
+  useEffect(() => {
+    if (engineLastStatus) setLastStatus(engineLastStatus);
+  }, [engineLastStatus]);
 
   useEffect(() => {
     void (async () => {
@@ -846,12 +864,13 @@ export function App() {
                   const nextUrl = webAppUrl.trim();
                   const nextWorkspace = workspaceKey.trim();
                   if (!nextUrl || !nextWorkspace) {
-                    setConnectionStatus(
+                    setLastStatus(
                       "Para sincronizar, completá WebApp URL y Workspace."
                     );
                     return;
                   }
-                  setConnectionStatus("Sincronizando...");
+                  setLastStatus("Sincronizando...");
+                  setSyncAlert(null);
                   try {
                     const meta = await fetchMetaWithStatus(nextUrl);
                     if (
@@ -860,19 +879,63 @@ export function App() {
                       meta.body &&
                       "spreadsheetUrl" in meta.body
                     ) {
+                      setSpreadsheetId(
+                        (meta.body as { spreadsheetId?: string })
+                          .spreadsheetId ?? null
+                      );
                       setSpreadsheetUrl(
                         (meta.body as { spreadsheetUrl?: string })
                           .spreadsheetUrl ?? null
                       );
                     }
+                    const diagBefore = await fetchDiagWithStatus(nextUrl);
+                    const prevTasks =
+                      diagBefore.ok &&
+                      typeof diagBefore.body === "object" &&
+                      diagBefore.body
+                        ? (diagBefore.body as { tasksRowCount?: number })
+                            .tasksRowCount ?? 0
+                        : 0;
                     await setSyncSettings({
                       webAppUrl: nextUrl,
                       workspaceKey: nextWorkspace
                     });
-                    await syncNow();
-                    setConnectionStatus("Sync completado.");
+                    const outcome = await syncNow();
+                    const diagAfter = await fetchDiagWithStatus(nextUrl);
+                    if (
+                      diagAfter.ok &&
+                      typeof diagAfter.body === "object" &&
+                      diagAfter.body
+                    ) {
+                      const body = diagAfter.body as {
+                        tasksRowCount: number;
+                        opsRowCount: number;
+                        eventsRowCount: number;
+                        focusRowCount: number;
+                        spreadsheetId?: string;
+                        spreadsheetUrl?: string;
+                      };
+                      setDiagSummary(body);
+                      setSpreadsheetId(body.spreadsheetId ?? null);
+                      setSpreadsheetUrl(body.spreadsheetUrl ?? null);
+                      if (
+                        outcome.appliedOps > 0 &&
+                        body.tasksRowCount <= prevTasks
+                      ) {
+                        setSyncAlert(
+                          "Alerta: se aplicaron ops pero Tasks no aumentó. Posible sheet equivocado."
+                        );
+                      }
+                    }
+                    if (outcome.sentOps > 0 && outcome.appliedOps === 0) {
+                      setSyncAlert(
+                        "Sync sin cambios: 0 ops aplicadas. Revisá SpreadsheetId y Diag."
+                      );
+                    }
+                    setLastStatus(outcome.statusMessage ?? "Sync completado.");
                   } catch (error) {
-                    setConnectionStatus(
+                    setSyncAlert(null);
+                    setLastStatus(
                       error instanceof Error
                         ? error.message
                         : "No se pudo sincronizar."
@@ -882,6 +945,58 @@ export function App() {
                 disabled={!isOnline || syncing}
               >
                 Sync now
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    const now = new Date().toISOString();
+                    const probeTask = buildEmptyTask({
+                      title: `diag-write-${Date.now()}`,
+                      stream: "otro",
+                      updatedAt: now,
+                      createdAt: now,
+                      lastTouchedAt: now,
+                      priorityLane: "P1",
+                      revision: 1
+                    });
+                    actions.addTask(probeTask);
+                    setLastStatus("Probar escritura: sincronizando...");
+                    await syncNow();
+                    const diag = await fetchDiagWithStatus(webAppUrl.trim());
+                    if (
+                      diag.ok &&
+                      typeof diag.body === "object" &&
+                      diag.body
+                    ) {
+                      const body = diag.body as {
+                        tasksRowCount: number;
+                        opsRowCount: number;
+                        eventsRowCount: number;
+                        focusRowCount: number;
+                        spreadsheetId?: string;
+                        spreadsheetUrl?: string;
+                      };
+                      setDiagSummary(body);
+                      setSpreadsheetId(body.spreadsheetId ?? null);
+                      setSpreadsheetUrl(body.spreadsheetUrl ?? null);
+                      setLastStatus(
+                        body.tasksRowCount > 0
+                          ? "OK: tasksRowCount aumentó."
+                          : "FALLA: no aumentó tasksRowCount."
+                      );
+                    }
+                  } catch (error) {
+                    setLastStatus(
+                      error instanceof Error
+                        ? error.message
+                        : "Falla en Probar escritura."
+                    );
+                  }
+                }}
+                disabled={!isOnline || syncing || !webAppUrl.trim() || !workspaceKey.trim()}
+              >
+                Probar escritura
               </button>
             </div>
             <div className="settings__status-grid">
@@ -894,7 +1009,12 @@ export function App() {
               </p>
               <p>Server time: {lastServerTime ?? "--"}</p>
               <p>Ops pendientes: {pendingOps}</p>
-              <p>Último error: {(lastError ?? connectionStatus) || "--"}</p>
+              <p>Último estado: {lastStatus || "--"}</p>
+              <p>
+                Último error: <span style={{ color: "#c53030" }}>{lastError || "--"}</span>
+              </p>
+              <p>SpreadsheetId: {spreadsheetId ?? "--"}</p>
+              <p>SpreadsheetUrl: {spreadsheetUrl ?? "--"}</p>
             </div>
             {spreadsheetUrl ? (
               <button
@@ -904,8 +1024,37 @@ export function App() {
                 Abrir hoja
               </button>
             ) : null}
-            {connectionStatus ? (
-              <p className="settings__status">{connectionStatus}</p>
+            {syncAlert ? (
+              <p className="settings__status" style={{ color: "#d69e2e" }}>
+                {syncAlert}
+              </p>
+            ) : null}
+            <div className="settings__status-grid">
+              <p>Debug Sync</p>
+              <p>webAppUrl: {webAppUrl || "--"}</p>
+              <p>workspaceKey: {workspaceKey || "--"}</p>
+              <p>clientId: {clientId ?? "--"}</p>
+              <p>lastServerTime: {lastServerTime ?? "--"}</p>
+              <p>opsQueue.length: {pendingOps}</p>
+              <p>
+                lastSyncRequestSummary: {" "}
+                {lastSyncRequestSummary
+                  ? JSON.stringify(lastSyncRequestSummary)
+                  : "--"}
+              </p>
+              <p>
+                lastSyncResponseSummary: {" "}
+                {lastSyncResponseSummary
+                  ? JSON.stringify(lastSyncResponseSummary)
+                  : "--"}
+              </p>
+              <p>
+                diag summary: {" "}
+                {diagSummary ? JSON.stringify(diagSummary) : "--"}
+              </p>
+            </div>
+            {lastStatus ? (
+              <p className="settings__status">{lastStatus}</p>
             ) : null}
             {conflictsResolved > 0 ? (
               <p className="status-banner">
