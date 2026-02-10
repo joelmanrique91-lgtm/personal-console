@@ -23,12 +23,34 @@ function buildTargetUrl(execUrl: string, route: "meta" | "diag" | "sync"): strin
   return url.toString();
 }
 
+async function fetchWithPreservedRedirect(
+  url: string,
+  init: RequestInit,
+  maxRedirects = 3
+): Promise<Response> {
+  let currentUrl = url;
+
+  for (let i = 0; i <= maxRedirects; i += 1) {
+    const response = await fetch(currentUrl, { ...init, redirect: "manual" });
+    const location = response.headers.get("location");
+
+    if (response.status >= 300 && response.status < 400 && location) {
+      currentUrl = new URL(location, currentUrl).toString();
+      continue;
+    }
+
+    return response;
+  }
+
+  throw new Error(`Too many redirects while calling Apps Script: ${url}`);
+}
+
 async function proxyJson(
   targetUrl: string,
   init: RequestInit,
   route: "meta" | "diag" | "sync"
 ): Promise<Response> {
-  const upstream = await fetch(targetUrl, init);
+  const upstream = await fetchWithPreservedRedirect(targetUrl, init);
   const raw = await upstream.text();
   const preview = raw.slice(0, 300);
 
@@ -68,11 +90,19 @@ export default {
 
     try {
       if (request.method === "GET" && requestUrl.pathname === "/api/meta") {
-        return proxyJson(buildTargetUrl(env.APPS_SCRIPT_EXEC, "meta"), { method: "GET" }, "meta");
+        return proxyJson(
+          buildTargetUrl(env.APPS_SCRIPT_EXEC, "meta"),
+          { method: "GET" },
+          "meta"
+        );
       }
 
       if (request.method === "GET" && requestUrl.pathname === "/api/diag") {
-        return proxyJson(buildTargetUrl(env.APPS_SCRIPT_EXEC, "diag"), { method: "GET" }, "diag");
+        return proxyJson(
+          buildTargetUrl(env.APPS_SCRIPT_EXEC, "diag"),
+          { method: "GET" },
+          "diag"
+        );
       }
 
       if (request.method === "POST" && requestUrl.pathname === "/api/sync") {
