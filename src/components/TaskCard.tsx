@@ -1,5 +1,6 @@
 import { PriorityLane, Status, Task } from "../store/types";
 import { BlockIcon, CheckIcon, FocusIcon } from "../ui/icons";
+import { calendarDayDiff, dateInputToIso } from "../utils/date";
 
 const statusLabels: Record<Status, string> = {
   backlog: "Backlog",
@@ -25,7 +26,7 @@ interface TaskCardProps {
 
 function getDueSemaforo(task: Task): "ok" | "warn" | "danger" | "none" {
   if (!task.dueDate) return "none";
-  const days = Math.ceil((new Date(task.dueDate).getTime() - Date.now()) / (24 * 60 * 60 * 1000));
+  const days = calendarDayDiff(task.dueDate);
   if (days < 0) return "danger";
   if (days <= 3) return "warn";
   return "ok";
@@ -34,7 +35,7 @@ function getDueSemaforo(task: Task): "ok" | "warn" | "danger" | "none" {
 function dueLabel(task: Task): string {
   if (!task.dueDate) return "Sin fecha";
   const due = new Date(task.dueDate);
-  const days = Math.ceil((due.getTime() - Date.now()) / (24 * 60 * 60 * 1000));
+  const days = calendarDayDiff(task.dueDate);
   if (days < 0) return "Vencida";
   if (days <= 3) return `Vence en ${Math.max(days, 0)} día(s)`;
   return due.toLocaleDateString("es-ES");
@@ -77,13 +78,13 @@ export function TaskCard({ task, onSelect, onSetStatus, onSetLane, onSetDueDate,
         <div className="task-card__actions" onClick={(event) => event.stopPropagation()}>
           {onSetStatus ? (
             <>
-              <button type="button" className="icon-btn" aria-label="Marcar en curso" onClick={() => onSetStatus("in_progress")}><FocusIcon width={16} height={16} /></button>
-              <button type="button" className="icon-btn" aria-label="Bloquear" onClick={onBlock}><BlockIcon width={16} height={16} /></button>
-              <button type="button" className="icon-btn" aria-label="Marcar hecha" onClick={() => onSetStatus("done")}><CheckIcon width={16} height={16} /></button>
-              <button type="button" className="btn btn--ghost btn--sm" onClick={() => onSetStatus("archived")}>Archivar</button>
+              <button type="button" className="icon-btn" aria-label="Marcar en curso" title="Marcar en curso" onClick={() => onSetStatus("in_progress")}><FocusIcon width={16} height={16} /></button>
+              <button type="button" className="icon-btn" aria-label="Bloquear" title="Bloquear" onClick={onBlock}><BlockIcon width={16} height={16} /></button>
+              <button type="button" className="icon-btn" aria-label="Marcar hecha" title="Marcar como hecha" onClick={() => onSetStatus("done")}><CheckIcon width={16} height={16} /></button>
+              <button type="button" className="btn btn--ghost btn--sm" title="Archivar tarea" onClick={() => onSetStatus("archived")}>Archivar</button>
             </>
           ) : null}
-          {onSetFocus ? <button type="button" className="btn btn--secondary btn--sm" onClick={onSetFocus}><FocusIcon width={16} height={16} /> Foco</button> : null}
+          {onSetFocus ? <button type="button" className="btn btn--secondary btn--sm" title="Poner en foco" onClick={onSetFocus}><FocusIcon width={16} height={16} /> Foco</button> : null}
           {onSetLane ? (
             <select value={task.priorityLane} onChange={(event) => onSetLane(event.target.value as PriorityLane)} aria-label="Asignar carril">
               {Object.entries(laneLabels).map(([value, label]) => <option key={value} value={value}>{value} · {label}</option>)}
@@ -92,7 +93,7 @@ export function TaskCard({ task, onSelect, onSetStatus, onSetLane, onSetDueDate,
           {onSetDueDate ? (
             <label className="sr-only" htmlFor={`due-${task.id}`}>Definir fecha</label>
           ) : null}
-          {onSetDueDate ? <input id={`due-${task.id}`} type="date" value={task.dueDate ? task.dueDate.slice(0, 10) : ""} onChange={(event) => onSetDueDate(event.target.value ? new Date(event.target.value).toISOString() : undefined)} aria-label="Definir fecha" /> : null}
+          {onSetDueDate ? <input id={`due-${task.id}`} type="date" value={task.dueDate ? task.dueDate.slice(0, 10) : ""} onChange={(event) => onSetDueDate(event.target.value ? dateInputToIso(event.target.value) : undefined)} aria-label="Definir fecha" /> : null}
         </div>
       ) : null}
     </article>
