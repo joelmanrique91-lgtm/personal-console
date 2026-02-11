@@ -2,6 +2,7 @@ const TASKS_HEADERS = [
   "workspaceKey",
   "taskId",
   "title",
+  "description",
   "status",
   "priorityLane",
   "priority",
@@ -134,7 +135,7 @@ function meta_() {
     spreadsheetId: db.spreadsheetId,
     spreadsheetName: db.spreadsheetName,
     spreadsheetUrl: db.spreadsheetUrl,
-    sheets: ["Tasks", "Ops", "TaskEvents", "FocusSessions"],
+    sheets: ["Tasks", "Tasks_View", "Ops", "TaskEvents", "FocusSessions"],
     serverTime: new Date().toISOString()
   };
 }
@@ -166,6 +167,7 @@ function sync_(body) {
   const db = ensureDb_();
   Logger.log("sync_db spreadsheetId=%s", db.spreadsheetId);
   const result = applyOps_(db, workspaceKey, clientId, ops);
+  refreshTasksView_(db.tasksSheet, db.tasksViewSheet, workspaceKey);
   const tasks = tasksSince_(db.tasksSheet, workspaceKey, since);
   Logger.log(
     "sync_apply workspaceKey=%s appliedOps=%s tasksPulled=%s",
@@ -208,6 +210,7 @@ function ensureDb_() {
   }
 
   const tasksSheet = ensureSheet_(ss, "Tasks", TASKS_HEADERS);
+  const tasksViewSheet = ensureSheet_(ss, "Tasks_View", ["title", "status", "priority", "dueDate", "tags", "area", "estimateMin", "updatedAt", "notes"]);
   const opsSheet = ensureSheet_(ss, "Ops", OPS_HEADERS);
   const eventsSheet = ensureSheet_(ss, "TaskEvents", EVENTS_HEADERS);
   const focusSheet = ensureSheet_(ss, "FocusSessions", FOCUS_HEADERS);
@@ -215,6 +218,7 @@ function ensureDb_() {
   return {
     ss,
     tasksSheet,
+    tasksViewSheet,
     opsSheet,
     eventsSheet,
     focusSheet,
@@ -227,10 +231,17 @@ function ensureDb_() {
 function ensureSheet_(ss, name, headers) {
   let sheet = ss.getSheetByName(name);
   if (!sheet) sheet = ss.insertSheet(name);
-  const range = sheet.getRange(1, 1, 1, headers.length);
+  const existingWidth = Math.max(sheet.getLastColumn(), headers.length);
+  const range = sheet.getRange(1, 1, 1, existingWidth);
   const values = range.getValues()[0];
-  const hasHeaders = values.filter(String).length === headers.length;
-  if (!hasHeaders) range.setValues([headers]);
+  const existingHeaders = values.map(String);
+
+  headers.forEach(function (header, idx) {
+    if (existingHeaders[idx] !== header) {
+      sheet.getRange(1, idx + 1).setValue(header);
+    }
+  });
+
   return sheet;
 }
 
@@ -469,6 +480,7 @@ function rowToTask_(row, i) {
   return {
     id: String(row[i.taskId] || ""),
     title: String(row[i.title] || ""),
+    description: valueOrUndefined_(row[i.description]),
     status: String(row[i.status] || "backlog"),
     priorityLane: String(row[i.priorityLane] || "P4"),
     priority: String(row[i.priority] || "med"),
@@ -499,6 +511,7 @@ function taskToRow_(workspaceKey, task) {
     workspaceKey,
     task.id,
     task.title || "",
+    task.description || "",
     task.status || "backlog",
     task.priorityLane || "P4",
     task.priority || "med",
@@ -531,6 +544,40 @@ function appendEvent_(sheet, event) {
     event.ts || new Date().toISOString(),
     JSON.stringify(event.payload || {})
   ]);
+}
+
+
+function refreshTasksView_(tasksSheet, viewSheet, workspaceKey) {
+  const data = tasksSheet.getDataRange().getValues();
+  if (data.length < 2) {
+    viewSheet.getRange(2, 1, Math.max(viewSheet.getLastRow() - 1, 0), 9).clearContent();
+    return;
+  }
+  const idx = indexHeaders_(data[0]);
+  const rows = [];
+  for (let i = 1; i < data.length; i += 1) {
+    const row = data[i];
+    if (String(row[idx.workspaceKey] || "") !== workspaceKey) continue;
+    if (String(row[idx.deletedAt] || "")) continue;
+    rows.push([
+      String(row[idx.title] || ""),
+      String(row[idx.status] || ""),
+      String(row[idx.priority] || ""),
+      String(row[idx.dueDate] || ""),
+      String(row[idx.tagsJson] || "[]"),
+      String(row[idx.stream] || ""),
+      String(row[idx.estimateMin] || ""),
+      String(row[idx.updatedAt] || ""),
+      String(row[idx.description] || "")
+    ]);
+  }
+  const clearRows = Math.max(viewSheet.getLastRow() - 1, 0);
+  if (clearRows > 0) viewSheet.getRange(2, 1, clearRows, 9).clearContent();
+  if (rows.length > 0) {
+    viewSheet.getRange(2, 1, rows.length, 9).setValues(rows);
+    if (viewSheet.getFilter()) viewSheet.getFilter().remove();
+    viewSheet.getRange(1, 1, rows.length + 1, 9).createFilter();
+  }
 }
 
 function parseJson_(value, fallback) {

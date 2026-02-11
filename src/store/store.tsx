@@ -66,6 +66,7 @@ function reducer(state: AppState, action: Action): AppState {
 
 interface StoreContextValue {
   state: AppState;
+  isHydrated: boolean;
   dispatch: React.Dispatch<Action>;
   actions: {
     addTask: (task: Task) => void;
@@ -84,6 +85,7 @@ const StoreContext = createContext<StoreContextValue | undefined>(undefined);
 
 export function StoreProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = useReducer(reducer, initialState);
+  const [isHydrated, setIsHydrated] = React.useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -101,6 +103,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
             activeTaskId: migrated?.activeTaskId
           }
         });
+        setIsHydrated(true);
       }
       if (migrated) {
         await setTasksCache(normalizedTasks);
@@ -224,7 +227,7 @@ export function StoreProvider({ children }: { children: React.ReactNode }) {
     };
   }, [state.tasks]);
 
-  const value = useMemo(() => ({ state, dispatch, actions }), [state, dispatch, actions]);
+  const value = useMemo(() => ({ state, isHydrated, dispatch, actions }), [state, isHydrated, dispatch, actions]);
 
   return <StoreContext.Provider value={value}>{children}</StoreContext.Provider>;
 }

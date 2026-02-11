@@ -34,3 +34,14 @@ export function endOfWeek(date = new Date()): Date {
 export function toIsoDate(date: Date): string {
   return date.toISOString();
 }
+
+export function dateInputToIso(dateInput: string): string {
+  const [year, month, day] = dateInput.split("-").map(Number);
+  return new Date(year, (month ?? 1) - 1, day ?? 1, 12, 0, 0, 0).toISOString();
+}
+
+export function calendarDayDiff(dateIso: string, compare = new Date()): number {
+  const target = startOfDay(new Date(dateIso));
+  const base = startOfDay(compare);
+  return Math.ceil((target.getTime() - base.getTime()) / (24 * 60 * 60 * 1000));
+}

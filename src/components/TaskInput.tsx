@@ -1,5 +1,6 @@
-import { useId, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { PlusIcon } from "../ui/icons";
+import { parseQuickInput } from "../utils/quickParser";
 
 interface TaskInputProps {
   onAdd: (value: string) => void;
@@ -9,11 +10,15 @@ export function TaskInput({ onAdd }: TaskInputProps) {
   const [value, setValue] = useState("");
   const inputId = useId();
   const helperId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const parsedInput = useMemo(() => parseQuickInput(value), [value]);
 
   const handleSubmit = () => {
     if (!value.trim()) return;
     onAdd(value.trim());
     setValue("");
+    inputRef.current?.focus();
   };
 
   return (
@@ -21,6 +26,7 @@ export function TaskInput({ onAdd }: TaskInputProps) {
       <label className="task-input__label" htmlFor={inputId}>Nueva tarea</label>
       <div className="task-input__composer">
         <input
+          ref={inputRef}
           id={inputId}
           value={value}
           onChange={(event) => setValue(event.target.value)}
@@ -33,8 +39,17 @@ export function TaskInput({ onAdd }: TaskInputProps) {
         </button>
       </div>
       <p id={helperId} className="task-input__helper">
-        Atajos: <span className="badge">#tag</span> <span className="badge">@contexto</span> <span className="badge">30m</span>
+        Atajos: <span className="badge">#tag</span> <span className="badge">@contexto</span> <span className="badge">30m / 2h</span>
       </p>
+      {value.trim() ? (
+        <div className="task-input__preview" aria-live="polite">
+          {parsedInput.tags.map((tag) => (
+            <span key={tag} className="badge">#{tag}</span>
+          ))}
+          {parsedInput.stream ? <span className="badge">@{parsedInput.stream}</span> : null}
+          {parsedInput.estimateMin ? <span className="badge">{parsedInput.estimateMin}m</span> : null}
+        </div>
+      ) : null}
     </section>
   );
 }
