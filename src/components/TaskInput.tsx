@@ -14,6 +14,8 @@ export function TaskInput({ onAdd }: TaskInputProps) {
 
   const parsedPreview = useMemo(() => parseQuickInput(value), [value]);
 
+  const parsedPreview = useMemo(() => parseQuickInput(value), [value]);
+
   const handleSubmit = () => {
     if (!value.trim()) return;
     onAdd(value.trim());
