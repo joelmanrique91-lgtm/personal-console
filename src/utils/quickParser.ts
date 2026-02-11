@@ -48,11 +48,14 @@ export function parseQuickInput(input: string): ParsedInput {
       priority = priorityMap[key] ?? priority;
       return;
     }
-    if (token.startsWith("~")) {
-      const value = token.slice(1).toLowerCase();
-      const match = value.match(/(\d+)(m|min)?/);
+    const durationToken = token.startsWith("~") ? token.slice(1) : token;
+    if (/^\d+(m|min|h|hr|hrs|hora|horas)?$/i.test(durationToken)) {
+      const value = durationToken.toLowerCase();
+      const match = value.match(/(\d+)(m|min|h|hr|hrs|hora|horas)?/);
       if (match) {
-        estimateMin = Number(match[1]);
+        const amount = Number(match[1]);
+        const unit = match[2];
+        estimateMin = unit?.startsWith("h") ? amount * 60 : amount;
         return;
       }
     }
