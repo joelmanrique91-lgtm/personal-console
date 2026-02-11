@@ -92,6 +92,8 @@ input,select,textarea { border:1px solid var(--border); background:var(--surface
 .task-card:hover { transform: translateY(-1px); box-shadow: var(--shadow-2); }
 .task-card__header { display:flex; justify-content:space-between; gap:var(--s-2); }
 .task-card__header h4 { margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.task-action-label { display:none; }
+.palette__panel ul { padding-left: 20px; overflow-wrap:anywhere; }
 .task-card__meta,.task-card__notes { color:var(--muted); margin:var(--s-2) 0; }
 .task-card__risk-row,.task-card__actions,.task-card__tags { display:flex; flex-wrap:wrap; gap:var(--s-2); align-items:center; }
 .task-card__due-chip { padding:4px 10px; border-radius:999px; font-size:var(--fs-1); }
@@ -133,4 +135,4 @@ input,select,textarea { border:1px solid var(--border); background:var(--surface
 @keyframes fade { from { opacity:0; } to { opacity:1; } }
 @keyframes slide { from { opacity:0; transform: translateY(16px);} to { opacity:1; transform: translateY(0);} }
 @media (min-width: 1120px) { .board { grid-template-columns: repeat(5,minmax(220px,1fr)); overflow-x:auto; } }
-@media (max-width: 768px) { .view,.app-header,.app-nav { padding:var(--s-3); } }
+@media (max-width: 768px) { .view,.app-header,.app-nav { padding:var(--s-3); } .task-action-label { display:inline; font-size: var(--fs-1); } .icon-btn { width:auto; padding: 0 10px; gap:6px; } .app-header__actions { gap: var(--s-2); } }

@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { PriorityLane, Status, Task } from "../store/types";
 import { BlockIcon, CheckIcon, FocusIcon } from "../ui/icons";
 import { calendarDayDiff, dateInputToIso } from "../utils/date";
@@ -21,6 +22,7 @@ interface TaskCardProps {
   onSetDueDate?: (dueDate?: string) => void;
   onBlock?: () => void;
   onSetFocus?: () => void;
+  onUpdateTitle?: (title: string) => void;
   compact?: boolean;
 }
 
@@ -41,9 +43,13 @@ function dueLabel(task: Task): string {
   return due.toLocaleDateString("es-ES");
 }
 
-export function TaskCard({ task, onSelect, onSetStatus, onSetLane, onSetDueDate, onBlock, onSetFocus, compact }: TaskCardProps) {
+export function TaskCard({ task, onSelect, onSetStatus, onSetLane, onSetDueDate, onBlock, onSetFocus, onUpdateTitle, compact }: TaskCardProps) {
   const isSelectable = Boolean(onSelect);
   const dueSemaforo = getDueSemaforo(task);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [draftTitle, setDraftTitle] = useState(task.title);
+
+  useEffect(() => setDraftTitle(task.title), [task.title]);
 
   return (
     <article
@@ -60,7 +66,36 @@ export function TaskCard({ task, onSelect, onSetStatus, onSetLane, onSetDueDate,
       }}
     >
       <div className="task-card__header">
-        <h4 title={task.title}>{task.title}</h4>
+        {isEditingTitle ? (
+          <input
+            value={draftTitle}
+            onClick={(event) => event.stopPropagation()}
+            onChange={(event) => setDraftTitle(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                const next = draftTitle.trim();
+                if (next && next !== task.title) onUpdateTitle?.(next);
+                setIsEditingTitle(false);
+              }
+              if (event.key === "Escape") {
+                setDraftTitle(task.title);
+                setIsEditingTitle(false);
+              }
+            }}
+            autoFocus
+          />
+        ) : (
+          <h4
+            title="Click para editar título"
+            onClick={(event) => {
+              if (!onUpdateTitle) return;
+              event.stopPropagation();
+              setIsEditingTitle(true);
+            }}
+          >
+            {task.title}
+          </h4>
+        )}
         <span className={`badge badge--status-${task.status}`}>{statusLabels[task.status]}</span>
       </div>
       <p className="task-card__meta">{laneLabels[task.priorityLane]}</p>
@@ -78,9 +113,9 @@ export function TaskCard({ task, onSelect, onSetStatus, onSetLane, onSetDueDate,
         <div className="task-card__actions" onClick={(event) => event.stopPropagation()}>
           {onSetStatus ? (
             <>
-              <button type="button" className="icon-btn" aria-label="Marcar en curso" title="Marcar en curso" onClick={() => onSetStatus("in_progress")}><FocusIcon width={16} height={16} /></button>
-              <button type="button" className="icon-btn" aria-label="Bloquear" title="Bloquear" onClick={onBlock}><BlockIcon width={16} height={16} /></button>
-              <button type="button" className="icon-btn" aria-label="Marcar hecha" title="Marcar como hecha" onClick={() => onSetStatus("done")}><CheckIcon width={16} height={16} /></button>
+              <button type="button" className="icon-btn" aria-label="Marcar en curso" title="Marcar en curso" onClick={() => onSetStatus("in_progress")}><FocusIcon width={16} height={16} /><span className="task-action-label">En curso</span></button>
+              <button type="button" className="icon-btn" aria-label="Bloquear" title="Bloquear" onClick={onBlock}><BlockIcon width={16} height={16} /><span className="task-action-label">Bloquear</span></button>
+              <button type="button" className="icon-btn" aria-label="Marcar hecha" title="Marcar como hecha" onClick={() => onSetStatus("done")}><CheckIcon width={16} height={16} /><span className="task-action-label">Hecha</span></button>
               <button type="button" className="btn btn--ghost btn--sm" title="Archivar tarea" onClick={() => onSetStatus("archived")}>Archivar</button>
             </>
           ) : null}

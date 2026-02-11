@@ -1,4 +1,4 @@
-import { useId, useMemo, useState } from "react";
+import { useId, useMemo, useRef, useState } from "react";
 import { PlusIcon } from "../ui/icons";
 import { parseQuickInput } from "../utils/quickParser";
 
@@ -10,6 +10,9 @@ export function TaskInput({ onAdd }: TaskInputProps) {
   const [value, setValue] = useState("");
   const inputId = useId();
   const helperId = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  const parsedPreview = useMemo(() => parseQuickInput(value), [value]);
 
   const parsedPreview = useMemo(() => parseQuickInput(value), [value]);
 
@@ -17,6 +20,7 @@ export function TaskInput({ onAdd }: TaskInputProps) {
     if (!value.trim()) return;
     onAdd(value.trim());
     setValue("");
+    inputRef.current?.focus();
   };
 
   return (
@@ -24,6 +28,7 @@ export function TaskInput({ onAdd }: TaskInputProps) {
       <label className="task-input__label" htmlFor={inputId}>Nueva tarea</label>
       <div className="task-input__composer">
         <input
+          ref={inputRef}
           id={inputId}
           value={value}
           onChange={(event) => setValue(event.target.value)}

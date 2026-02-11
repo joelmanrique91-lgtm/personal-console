@@ -88,12 +88,13 @@ function compareBoardOrder(a: Task, b: Task): number {
 }
 
 export function App() {
-  const { state, dispatch, actions } = useStore();
+  const { state, isHydrated, dispatch, actions } = useStore();
   const [view, setView] = useState<View>("inbox");
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
+  const [undoCreate, setUndoCreate] = useState<{ taskId: string; title: string } | null>(null);
   const [webAppUrl, setWebAppUrl] = useState("");
   const [workspaceKey, setWorkspaceKey] = useState("");
   const [lastStatus, setLastStatus] = useState("");
@@ -128,6 +129,7 @@ export function App() {
     P4: 0
   });
   const detailTitleRef = useRef<HTMLInputElement>(null);
+  const undoTimerRef = useRef<number | null>(null);
 
   const {
     syncing,
@@ -174,6 +176,12 @@ export function App() {
       void setFocusTaskId(state.activeTaskId);
     }
   }, [state.activeTaskId]);
+
+  useEffect(() => {
+    return () => {
+      if (undoTimerRef.current) window.clearTimeout(undoTimerRef.current);
+    };
+  }, []);
 
   useEffect(() => {
     if (!statusMessage) return;
@@ -349,19 +357,24 @@ export function App() {
 
   const addTask = (rawValue: string) => {
     const parsed = parseQuickInput(rawValue);
-    if (!parsed.title) return;
-    actions.addTask(
-      buildEmptyTask({
-        title: parsed.title,
-        priority: parsed.priority ?? "med",
-        stream: parsed.stream ?? "otro",
-        estimateMin: parsed.estimateMin,
-        effort: parsed.estimateMin,
-        tags: parsed.tags,
-        status: "backlog",
-        priorityLane: "P4"
-      })
-    );
+    if (!parsed.title.trim()) {
+      setStatusMessage("El título no puede estar vacío. Escribí una tarea concreta.");
+      return;
+    }
+    const created = buildEmptyTask({
+      title: parsed.title,
+      priority: parsed.priority ?? "med",
+      stream: parsed.stream ?? "otro",
+      estimateMin: parsed.estimateMin,
+      effort: parsed.estimateMin,
+      tags: parsed.tags,
+      status: "backlog",
+      priorityLane: "P4"
+    });
+    actions.addTask(created);
+    setUndoCreate({ taskId: created.id, title: created.title });
+    if (undoTimerRef.current) window.clearTimeout(undoTimerRef.current);
+    undoTimerRef.current = window.setTimeout(() => setUndoCreate(null), 5000);
   };
 
   const setFocusTask = (task: Task) => {
@@ -484,6 +497,17 @@ export function App() {
       .includes(paletteQuery.toLowerCase())
   );
 
+  if (!isHydrated) {
+    return (
+      <div className="app">
+        <header className="app-header">
+          <h1>Personal Console</h1>
+          <div className="status-banner">Cargando tareas locales…</div>
+        </header>
+      </div>
+    );
+  }
+
   return (
     <div className="app">
       <header className="app-header">
@@ -513,17 +537,17 @@ export function App() {
               checked={includeDoneArchivedExport}
               onChange={(e) => setIncludeDoneArchivedExport(e.target.checked)}
             />
-            Incluir hechas y archivadas
+Incluir hechas/archivadas en backup
           </label>
           <button
             type="button"
             className="btn btn--secondary"
             onClick={() => void handleExport()}
-          >
-            Exportar
+           disabled={tasksWithRisk.length === 0}>
+            Exportar backup local
           </button>
           <label className="import-label btn btn--secondary">
-            Importar
+            Importar backup
             <input
               type="file"
               accept="application/json"
@@ -540,9 +564,26 @@ export function App() {
           </span>
           <span>Ops pendientes: {pendingOps}</span>
           {syncing ? <span>Sincronizando…</span> : null}
+          {pendingOps > 0 ? <span>Cambios sin sincronizar</span> : <span>Todo sincronizado</span>}
         </div>
         {statusMessage ? (
           <div className="status-banner">{statusMessage}</div>
+        ) : null}
+        {undoCreate ? (
+          <div className="status-banner">
+            Tarea creada: {undoCreate.title}. 
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={() => {
+                actions.deleteTask(undoCreate.taskId);
+                setUndoCreate(null);
+                if (undoTimerRef.current) window.clearTimeout(undoTimerRef.current);
+              }}
+            >
+              Deshacer
+            </button>
+          </div>
         ) : null}
       </header>
       <nav className="app-nav">
@@ -602,6 +643,7 @@ export function App() {
                     })
                   }
                   onSetFocus={() => setFocusTask(task)}
+                  onUpdateTitle={(title) => actions.updateTask({ ...task, title })}
                   onSelect={() => setDetailTaskId(task.id)}
                 />
               ))}
@@ -712,6 +754,7 @@ export function App() {
                             if (reason)
                               actions.setStatus(task.id, "blocked", reason);
                           }}
+                          onUpdateTitle={(title) => actions.updateTask({ ...task, title })}
                           onSelect={() => setDetailTaskId(task.id)}
                         />
                       </div>
