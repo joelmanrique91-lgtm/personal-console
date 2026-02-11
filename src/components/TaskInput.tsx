@@ -12,9 +12,7 @@ export function TaskInput({ onAdd }: TaskInputProps) {
   const helperId = useId();
   const inputRef = useRef<HTMLInputElement>(null);
 
-  const parsedPreview = useMemo(() => parseQuickInput(value), [value]);
-
-  const parsedPreview = useMemo(() => parseQuickInput(value), [value]);
+  const parsedInput = useMemo(() => parseQuickInput(value), [value]);
 
   const handleSubmit = () => {
     if (!value.trim()) return;
@@ -45,11 +43,11 @@ export function TaskInput({ onAdd }: TaskInputProps) {
       </p>
       {value.trim() ? (
         <div className="task-input__preview" aria-live="polite">
-          {parsedPreview.tags.map((tag) => (
+          {parsedInput.tags.map((tag) => (
             <span key={tag} className="badge">#{tag}</span>
           ))}
-          {parsedPreview.stream ? <span className="badge">@{parsedPreview.stream}</span> : null}
-          {parsedPreview.estimateMin ? <span className="badge">{parsedPreview.estimateMin}m</span> : null}
+          {parsedInput.stream ? <span className="badge">@{parsedInput.stream}</span> : null}
+          {parsedInput.estimateMin ? <span className="badge">{parsedInput.estimateMin}m</span> : null}
         </div>
       ) : null}
     </section>
