@@ -1,5 +1,6 @@
-import { useId, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { PlusIcon } from "../ui/icons";
+import { parseQuickInput } from "../utils/quickParser";
 
 interface TaskInputProps {
   onAdd: (value: string) => void;
@@ -9,6 +10,8 @@ export function TaskInput({ onAdd }: TaskInputProps) {
   const [value, setValue] = useState("");
   const inputId = useId();
   const helperId = useId();
+
+  const parsedPreview = useMemo(() => parseQuickInput(value), [value]);
 
   const handleSubmit = () => {
     if (!value.trim()) return;
@@ -33,8 +36,17 @@ export function TaskInput({ onAdd }: TaskInputProps) {
         </button>
       </div>
       <p id={helperId} className="task-input__helper">
-        Atajos: <span className="badge">#tag</span> <span className="badge">@contexto</span> <span className="badge">30m</span>
+        Atajos: <span className="badge">#tag</span> <span className="badge">@contexto</span> <span className="badge">30m / 2h</span>
       </p>
+      {value.trim() ? (
+        <div className="task-input__preview" aria-live="polite">
+          {parsedPreview.tags.map((tag) => (
+            <span key={tag} className="badge">#{tag}</span>
+          ))}
+          {parsedPreview.stream ? <span className="badge">@{parsedPreview.stream}</span> : null}
+          {parsedPreview.estimateMin ? <span className="badge">{parsedPreview.estimateMin}m</span> : null}
+        </div>
+      ) : null}
     </section>
   );
 }

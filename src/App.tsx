@@ -36,7 +36,7 @@ import {
   setFocusTaskId,
   setSyncSettings
 } from "./sync/storage";
-import { isSameDay } from "./utils/date";
+import { dateInputToIso, isSameDay } from "./utils/date";
 import { parseQuickInput } from "./utils/quickParser";
 import { computeRisk, enrichTaskRisk } from "./utils/risk";
 import "./styles/app.css";
@@ -91,6 +91,7 @@ export function App() {
   const { state, dispatch, actions } = useStore();
   const [view, setView] = useState<View>("inbox");
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const [paletteQuery, setPaletteQuery] = useState("");
   const [statusMessage, setStatusMessage] = useState("");
   const [webAppUrl, setWebAppUrl] = useState("");
@@ -112,6 +113,7 @@ export function App() {
   const [statusFilter, setStatusFilter] = useState<Status | "all">("all");
   const [showDone, setShowDone] = useState(false);
   const [detailTaskId, setDetailTaskId] = useState<string | null>(null);
+  const [showDebugSync, setShowDebugSync] = useState(false);
   const [streamFilter, setStreamFilter] = useState<TaskStream | "all">("all");
   const [priorityFilter, setPriorityFilter] = useState<TaskPriority | "all">(
     "all"
@@ -494,7 +496,7 @@ export function App() {
           <button
             type="button"
             className="btn btn--ghost"
-            onClick={() => setPaletteOpen(true)}
+            onClick={() => setHelpOpen(true)}
           >
             Cómo se usa
           </button>
@@ -584,7 +586,10 @@ export function App() {
                   key={task.id}
                   task={task}
                   onSetLane={(lane) => handleSetLane(task, lane)}
-                  onSetStatus={(status) => actions.setStatus(task.id, status)}
+                  onSetStatus={(status) => {
+                    if (status === "archived" && !window.confirm("¿Archivar esta tarea?")) return;
+                    actions.setStatus(task.id, status);
+                  }}
                   onBlock={() => {
                     const reason = window.prompt("Motivo de bloqueo")?.trim();
                     if (reason) actions.setStatus(task.id, "blocked", reason);
@@ -683,9 +688,10 @@ export function App() {
                       >
                         <TaskCard
                           task={task}
-                          onSetStatus={(status) =>
-                            actions.setStatus(task.id, status)
-                          }
+                          onSetStatus={(status) => {
+                            if (status === "archived" && !window.confirm("¿Archivar esta tarea?")) return;
+                            actions.setStatus(task.id, status);
+                          }}
                           onSetLane={(nextLane) =>
                             handleSetLane(task, nextLane)
                           }
@@ -785,16 +791,19 @@ export function App() {
               setDetailTaskId(taskId);
               setView("board");
             }}
-            onMovePendingToToday={() =>
-              todayPending.forEach((task) => actions.setLane(task.id, "P0"))
-            }
-            onClearTrash={() =>
-              tasksWithRisk
-                .filter(
-                  (task) => task.status === "backlog" && task.title.length < 3
-                )
-                .forEach((task) => actions.deleteTask(task.id))
-            }
+            onMovePendingToToday={() => {
+              if (!todayPending.length) return;
+              if (!window.confirm(`Se moverán ${todayPending.length} tareas pendientes a Hoy. ¿Continuar?`)) return;
+              todayPending.forEach((task) => actions.setLane(task.id, "P0"));
+            }}
+            onClearTrash={() => {
+              const trashTasks = tasksWithRisk.filter(
+                (task) => task.status === "backlog" && task.title.length < 3
+              );
+              if (!trashTasks.length) return;
+              if (!window.confirm(`Se borrarán ${trashTasks.length} tareas basura. Esta acción no se puede deshacer. ¿Continuar?`)) return;
+              trashTasks.forEach((task) => actions.deleteTask(task.id));
+            }}
           />
         </section>
       ) : null}
@@ -1103,7 +1112,15 @@ export function App() {
                 {syncAlert}
               </p>
             ) : null}
-            <div className="settings__status-grid">
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={() => setShowDebugSync((prev) => !prev)}
+            >
+              {showDebugSync ? "Ocultar detalles técnicos" : "Mostrar detalles técnicos"}
+            </button>
+            {showDebugSync ? (
+              <div className="settings__status-grid">
               <p>Debug Sync</p>
               <p>webAppUrl: {webAppUrl || "--"}</p>
               <p>effectiveSyncBase: {resolveEffectiveSyncBase(webAppUrl || "")}</p>
@@ -1131,6 +1148,7 @@ export function App() {
                 {diagSummary ? JSON.stringify(diagSummary) : "--"}
               </p>
             </div>
+            ) : null}
             {lastStatus ? (
               <p className="settings__status">{lastStatus}</p>
             ) : null}
@@ -1249,7 +1267,7 @@ export function App() {
                   actions.updateTask({
                     ...detailTask,
                     dueDate: e.target.value
-                      ? new Date(e.target.value).toISOString()
+                      ? dateInputToIso(e.target.value)
                       : undefined
                   })
                 }
@@ -1321,6 +1339,30 @@ export function App() {
                 Borrar
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+
+      {helpOpen ? (
+        <div className="palette" onClick={() => setHelpOpen(false)}>
+          <div
+            className="palette__panel"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="palette__header">
+              <p>Cómo se usa</p>
+              <button type="button" onClick={() => setHelpOpen(false)}>
+                Cerrar
+              </button>
+            </div>
+            <ul>
+              <li>Escribí una tarea en <strong>Nueva tarea</strong> y presioná Enter.</li>
+              <li>Usá <span className="badge">#tag</span> para etiquetas y <span className="badge">@contexto</span> para área sugerida.</li>
+              <li>Indicá duración con <span className="badge">30m</span> o <span className="badge">2h</span>.</li>
+              <li>Usá los botones de cada tarjeta para <strong>en curso</strong>, <strong>bloquear</strong>, <strong>hecha</strong>, <strong>archivar</strong> y <strong>foco</strong>.</li>
+              <li>En el campo de fecha podés asignar vencimiento; hoy ya no se considera vencida.</li>
+            </ul>
           </div>
         </div>
       ) : null}
